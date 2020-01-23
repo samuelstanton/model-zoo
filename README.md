@@ -1,2 +1,2 @@
 # model-zoo
-out-of-the-box probabilistic regression models
+out-of-the-box probabilistic regression models in PyTorch
