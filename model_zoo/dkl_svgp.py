@@ -106,15 +106,15 @@ class DeepFeatureSVGP(GP):
 
     def fit(
         self,
-        inputs: np.ndarray,
-        targets: np.ndarray,
+        train_data,
+        holdout_data,
         objective='elbo',
         max_epochs: int = None,
-        holdout_ratio: float = 0.,
         normalize: bool = True,
         early_stopping: bool = False,
         pretrain: bool = False,
         reinit_inducing_loc: bool = False,
+        verbose=False,
         **kwargs
     ):
         """
@@ -132,37 +132,33 @@ class DeepFeatureSVGP(GP):
         :param reinit_inducing_loc: If `True`, initialize inducing points with k-means.
         :return: metrics: `dict` with keys 'train_loss', 'val_loss', 'val_mse'.
         """
-        dataset = torch.utils.data.TensorDataset(
-            torch.tensor(inputs, dtype=torch.get_default_dtype()),
-            torch.tensor(targets, dtype=torch.get_default_dtype())
+        train_data = torch.utils.data.TensorDataset(
+            torch.tensor(train_data[0], dtype=torch.get_default_dtype()),
+            torch.tensor(train_data[1], dtype=torch.get_default_dtype())
         )
+        holdout_data = torch.utils.data.TensorDataset(
+            torch.tensor(holdout_data[0], dtype=torch.get_default_dtype()),
+            torch.tensor(holdout_data[1], dtype=torch.get_default_dtype())
+        )
+
         if objective == 'elbo':
-            obj_fn = VariationalELBO(self.likelihood, self, num_data=len(dataset))
+            obj_fn = VariationalELBO(self.likelihood, self, num_data=len(train_data))
         elif objective == 'pll':
-            obj_fn = PredictiveLogLikelihood(self.likelihood, self, num_data=len(dataset), beta=1e-3)
+            obj_fn = PredictiveLogLikelihood(self.likelihood, self, num_data=len(train_data), beta=1e-3)
         else:
             raise RuntimeError("unrecognized model objective")
 
-        if early_stopping and holdout_ratio <= 0.:
-            raise RuntimeError("holdout dataset required for early stopping")
-        n_val = min(int(5000), int(holdout_ratio * len(dataset)))
-        if n_val > 0:
-            n_train = len(dataset) - n_val
-            train_data, holdout_data = torch.utils.data.random_split(dataset, [n_train, n_val])
-        else:
-            train_data, holdout_data = dataset, None
-
-        if early_stopping:
+        if holdout_data and early_stopping:
             val_x, val_y = holdout_data[:]
             eval_loss, eval_mse = self._get_val_metrics(obj_fn, torch.nn.MSELoss(), val_x, val_y)
         if eval_loss != eval_loss or not early_stopping:
             snapshot_loss = 1e6
         else:
             snapshot_loss = eval_loss
-        # snapshot_loss = eval_loss if early_stopping else 1e6
         snapshot = (0, snapshot_loss)
-        print(f"[ SVGP ] initial holdout loss: {eval_loss:.4f}, MSE: {eval_mse:.4f}")
 
+        if verbose:
+            print(f"[ SVGP ] initial holdout loss: {eval_loss:.4f}, MSE: {eval_mse:.4f}")
         self.load_state_dict(self._train_ckpt)
 
         if normalize:
@@ -176,7 +172,8 @@ class DeepFeatureSVGP(GP):
 
         if pretrain:
             if self.feature_dim == self.label_dim:
-                print("[ SVGP ] pretraining feature extractor")
+                if verbose:
+                    print("[ SVGP ] pretraining feature extractor")
                 self.nn.fit(
                     dataset=train_data,
                     holdout_ratio=0.,
@@ -186,11 +183,13 @@ class DeepFeatureSVGP(GP):
                 raise RuntimeError("features and labels must be the same size to pretrain")
 
         if reinit_inducing_loc:
-            print("[ SVGP ] initializing inducing point locations w/ k-means")
+            if verbose:
+                print("[ SVGP ] initializing inducing point locations w/ k-means")
             train_inputs, _ = train_data[:]
             self.set_inducing_loc(train_inputs)
 
-        print(f"[ SVGP ] training w/ objective {objective} on {len(train_data)} examples")
+        if verbose:
+            print(f"[ SVGP ] training w/ objective {objective} on {len(train_data)} examples")
         optimizer = Adam(self.optim_param_groups)
         if reinit_inducing_loc:
             temp = self.max_epochs_since_update
@@ -206,7 +205,8 @@ class DeepFeatureSVGP(GP):
             )
             metrics = loop_metrics
             self.max_epochs_since_update = temp
-            print("[ SVGP ] dropping learning rate")
+            if verbose:
+                print("[ SVGP ] dropping learning rate")
 
         for group in optimizer.param_groups:
             group['lr'] /= 10
@@ -225,15 +225,18 @@ class DeepFeatureSVGP(GP):
         else:
             metrics = loop_metrics
 
-        print(f"[ SVGP ] holdout loss: {metrics['val_loss'][-1]:.4f}, MSE: {metrics['val_mse'][-1]:.4f}")
-        print(f"[ SVGP ] loading snapshot from epoch {snapshot[0]}")
         self._train_ckpt = deepcopy(self.state_dict())
         self.load_state_dict(self._eval_ckpt)
         self.train() # TODO investigate GPyTorch load_state_dict bug
         eval_loss, eval_mse = self._get_val_metrics(obj_fn, torch.nn.MSELoss(), val_x, val_y)
-        print(f"[ SVGP ] final holdout loss: {eval_loss:.4f}, MSE: {eval_mse:.4f}")
         metrics['holdout_mse'] = eval_mse
         metrics['holdout_loss'] = eval_loss
+
+        if verbose:
+            print(f"[ SVGP ] holdout loss: {metrics['val_loss'][-1]:.4f}, MSE: {metrics['val_mse'][-1]:.4f}")
+            print(f"[ SVGP ] loading snapshot from epoch {snapshot[0]}")
+            print(f"[ SVGP ] final holdout loss: {eval_loss:.4f}, MSE: {eval_mse:.4f}")
+
         self.eval()
         return metrics
 

@@ -26,17 +26,41 @@ class GPEnsemble(torch.nn.Module):
     def random_inds(self, batch_size):
         return np.random.randint(0, self.num_elites, (batch_size,))
 
-    def fit(self, inputs, targets, fit_args, bootstrapped=True):
+    def random_split(self, inputs, targets, n_holdout):
         n, _ = inputs.shape
-        holdout_metrics = []
-        for gp in self.components:
-            boot_idx = np.random.randint(0, n, (n,)) if bootstrapped else np.arange(n)
-            gp_inputs, gp_targets = inputs[boot_idx], targets[boot_idx]
-            metrics = gp.fit(gp_inputs, gp_targets, **fit_args)
-            holdout_metrics.append((metrics['holdout_loss'], metrics['holdout_mse']))
+        shuffle_idx = np.arange(n)
+        np.random.shuffle(shuffle_idx)
+        inputs, targets = inputs[shuffle_idx], targets[shuffle_idx]
+        train_data = inputs[n_holdout:], targets[n_holdout:]
+        holdout_data = inputs[:n_holdout], targets[:n_holdout]
+        return train_data, holdout_data
+
+    def fit(self, inputs, targets, holdout_ratio, fit_args, bootstrapped=True):
+        n, _ = inputs.shape
+        n_holdout = min(5000, int(holdout_ratio * n))
+        n_train = n - n_holdout
+        assert n_holdout > 1
+        train_data, holdout_data = self.random_split(inputs, targets, n_holdout)
+
+        holdout_losses = np.empty((len(self.components),))
+        holdout_mses = np.empty_like(holdout_losses)
+        for i, gp in enumerate(self.components):
+            boot_idx = np.random.randint(0, n_train, (n_train,)) if bootstrapped else np.arange(n_train)
+            bootstrap_data = train_data[0][boot_idx], train_data[1][boot_idx]
+            metrics = gp.fit(bootstrap_data, holdout_data, **fit_args)
+            holdout_losses[i] = metrics['holdout_loss']
+            holdout_mses[i] = metrics['holdout_mse']
+
         # rank components by holdout loss
-        self.component_rank.sort(key=lambda i: holdout_metrics[i][0])
-        return holdout_metrics
+        self.component_rank.sort(key=lambda k: holdout_losses[k])
+        print(f"holdout loss: {holdout_losses}")
+        print(f"holdout MSE: {holdout_mses}")
+        print(f"best components: {self.component_rank[:self.num_elites]}")
+        metrics = dict(
+            holdout_loss=holdout_losses.mean(),
+            holdout_mse=holdout_mses.mean()
+        )
+        return metrics
 
     def predict(self, inputs, factored=False):
         """
