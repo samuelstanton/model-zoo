@@ -35,7 +35,8 @@ class GPEnsemble(torch.nn.Module):
         holdout_data = inputs[:n_holdout], targets[:n_holdout]
         return train_data, holdout_data
 
-    def fit(self, inputs, targets, holdout_ratio, fit_args, bootstrapped=True):
+    def fit(self, data, holdout_ratio, fit_args, bootstrapped=True):
+        inputs, targets = data
         n, _ = inputs.shape
         n_holdout = min(5000, int(holdout_ratio * n))
         n_train = n - n_holdout
@@ -79,13 +80,10 @@ class GPEnsemble(torch.nn.Module):
 
         agg_mean = factored_means.mean(0)
         pred_mean_var = np.power(factored_means - agg_mean, 2).mean(0)
-        pred_metrics = {
-            'avg_pred_mean_var': pred_mean_var.mean()
-        }
         if factored:
             pred_mean, pred_var = factored_means, factored_vars
         else:
             pred_mean = agg_mean
             pred_var = pred_mean_var + factored_vars.mean(0)
 
-        return pred_mean, pred_var, pred_metrics
+        return pred_mean, pred_var
