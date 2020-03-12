@@ -115,6 +115,7 @@ class DeepFeatureSVGP(GP):
         pretrain: bool = False,
         reinit_inducing_loc: bool = False,
         verbose=False,
+        max_steps=None,
         **kwargs
     ):
         """
@@ -201,7 +202,8 @@ class DeepFeatureSVGP(GP):
                 obj_fn,
                 snapshot,
                 max_epochs,
-                early_stopping
+                early_stopping,
+                max_steps,
             )
             metrics = loop_metrics
             self.max_epochs_since_update = temp
@@ -217,7 +219,8 @@ class DeepFeatureSVGP(GP):
             obj_fn,
             snapshot,
             max_epochs,
-            early_stopping
+            early_stopping,
+            max_steps
         )
         if reinit_inducing_loc:
             for key in metrics.keys():
@@ -248,7 +251,8 @@ class DeepFeatureSVGP(GP):
             obj_fn,
             snapshot,
             max_epochs,
-            early_stopping
+            early_stopping,
+            max_steps,
     ):
         metrics = {
             'train_loss': [],
@@ -261,6 +265,7 @@ class DeepFeatureSVGP(GP):
         avg_train_loss = None
         alpha = 2 / (num_batches + 1)
         mse_fn = torch.nn.MSELoss()
+        steps = 1
         dataloader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
         if val_dataset:
             val_x, val_y = val_dataset[:]
@@ -280,6 +285,11 @@ class DeepFeatureSVGP(GP):
                     avg_train_loss = alpha * loss.item() + (1 - alpha) * avg_train_loss
                 else:
                     avg_train_loss = loss.item()
+
+                if max_steps and steps == max_steps:
+                    print("trained for max steps allowed, breaking")
+                    return metrics, snapshot
+                steps += 1
 
             if val_dataset:
                 val_loss, val_mse = self._get_val_metrics(obj_fn, mse_fn, val_x, val_y)

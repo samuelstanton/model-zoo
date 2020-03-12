@@ -35,20 +35,14 @@ class GPEnsemble(torch.nn.Module):
         holdout_data = inputs[:n_holdout], targets[:n_holdout]
         return train_data, holdout_data
 
-    def fit(self, data, holdout_ratio, fit_args, bootstrapped=True):
-        inputs, targets = data
-        n, _ = inputs.shape
-        n_holdout = min(5000, int(holdout_ratio * n))
-        n_train = n - n_holdout
-        assert n_holdout > 1
-        train_data, holdout_data = self.random_split(inputs, targets, n_holdout)
-
+    def fit(self, dataset, fit_args):
+        train_inputs, train_targets = dataset.train_data
         holdout_losses = np.empty((len(self.components),))
         holdout_mses = np.empty_like(holdout_losses)
         for i, gp in enumerate(self.components):
-            boot_idx = np.random.randint(0, n_train, (n_train,)) if bootstrapped else np.arange(n_train)
-            bootstrap_data = train_data[0][boot_idx], train_data[1][boot_idx]
-            metrics = gp.fit(bootstrap_data, holdout_data, **fit_args)
+            boot_idx = dataset.bootstrap_idxs[i]
+            bootstrap_data = train_inputs[boot_idx], train_targets[boot_idx]
+            metrics = gp.fit(bootstrap_data, dataset.holdout_data, **fit_args)
             holdout_losses[i] = metrics['holdout_loss']
             holdout_mses[i] = metrics['holdout_mse']
 
