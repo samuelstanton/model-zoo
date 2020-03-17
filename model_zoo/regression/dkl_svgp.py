@@ -129,29 +129,27 @@ class DeepFeatureSVGP(GP):
         var = pred_dist.variance * self.label_std.pow(2).view(self.label_dim, 1)
         return mean.t().cpu().numpy(), var.t().cpu().numpy()
 
-    def fit(self, train_data, holdout_data, objective='elbo', max_epochs: int = None,
-        normalize: bool = True,
-        early_stopping: bool = False,
-        pretrain: bool = False,
-        reinit_inducing_loc: bool = False,
-        verbose=False,
-        max_steps=None,
-        **kwargs
-    ):
+    def fit(self, train_data, holdout_data, objective='elbo', max_epochs=None,
+            normalize=True, early_stopping=False, pretrain=False,
+            reinit_inducing_loc=False, verbose=False, max_steps=None, **kwargs):
         """
         Train the model on `dataset` by maximizing either the `VariationalELBO` or `PredictiveLogLikelihood` objective.
-        :param dataset: `torch.utils.data.Dataset`
-        Optional Arguments
-        :param objective: `'elbo'` or `'pll'`.
-        :param max_epochs: max number of epochs to train.
-        :param holdout_ratio: proportion of `dataset` to hold out.
-        :param normalize: If `True` normalize training inputs and labels
-        :param early_stopping: If `True`, use holdout loss as convergence criterion.
-                               Requires holdout_ratio > 0.
-        :param pretrain: If `True`, pretrain the feature extractor with the MSE objective.
-                         Requires self.feature_dim == self.label_dim.
-        :param reinit_inducing_loc: If `True`, initialize inducing points with k-means.
-        :return: metrics: `dict` with keys 'train_loss', 'val_loss', 'val_mse'.
+        Args:
+            train_data (tuple of np.array objects)
+            holdout_data (tuple of np.array objects)
+            objective (str): "pll" or "elbo"
+            max_epochs (int): max number of epochs to train
+            normalize (bool): if True, z-score inputs and targets
+            early_stopping (bool): If True, use holdout loss as convergence criterion.
+                                   Requires holdout_ratio > 0.
+            pretrain (bool): If True, pretrain the feature extractor with the MSE objective.
+                             Requires self.feature_dim == self.label_dim.
+            reinit_inducing_loc (bool): If True, initialize inducing points with k-means.
+            max_steps (int)
+            verbose (bool)
+
+        Return:
+            metrics (dict)
         """
         train_data = torch.utils.data.TensorDataset(
             torch.tensor(train_data[0], dtype=torch.get_default_dtype()),
