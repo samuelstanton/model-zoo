@@ -31,12 +31,10 @@ class FCRegression(FCNet):
             batch_norm (bool)
             max_epochs_since_update (int): number of epochs to wait for improvement during training
         """
-        params = locals()
-        del params['self']
-        self.__dict__ = params
         output_dim = 2 * target_dim
         super().__init__(input_dim, output_dim, hidden_width,
                          hidden_depth, activation, batch_norm)
+        self.max_epochs_since_update = max_epochs_since_update
 
         # initialize other parameters and buffers
         self.register_parameter("max_logvar", Parameter(torch.tensor([0.5])))
