@@ -46,7 +46,7 @@ class DeepFeatureSVGP(GP):
             input_shape=torch.Size([input_dim]),
             output_shape=torch.Size([feature_dim]),
             hidden_width=hidden_width,
-            depth=hidden_depth,
+            hidden_depth=hidden_depth,
             batch_norm=True
         )
         self.batch_norm = torch.nn.BatchNorm1d(feature_dim)
