@@ -1,11 +1,9 @@
-from .dkl_svgp import DeepFeatureSVGP
-from .fc import FC
-from .gp_ensemble import GPEnsemble
-from .nn_ensemble import PytorchBNN
+from model_zoo.zoo.fc import FC
+from model_zoo.ensemble.fc_ensemble import FCEnsemble
 
 __all__ = [
     'DeepFeatureSVGP',
     'FC',
     'GPEnsemble',
-    'PytorchBNN',
+    'FCEnsemble',
 ]
