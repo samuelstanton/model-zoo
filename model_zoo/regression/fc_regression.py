@@ -1,19 +1,19 @@
 import math
 import torch
 
-from collections import OrderedDict
-
 from copy import deepcopy
 
-from torch.nn import Linear, BatchNorm1d, ReLU, Parameter
+from torch.nn import Linear, Parameter
 from torch.nn.functional import softplus
 from torch.utils.data import DataLoader
 from torch.distributions import Normal
 from torch.optim import Adam
 
+from model_zoo.architecture import FCNet
 
-class FC(torch.nn.Sequential):
-    """ Fully-connected neural network w/ Gaussian predictive distributions
+
+class FCRegression(FCNet):
+    """ Fully-connected neural network regression model w/ Gaussian predictive distributions
 
     Behavior should closely mimic that of the component networks in Kurtland Chua's
     bootstrapped deep ensemble implementation (https://tinyurl.com/vl4alu9)
@@ -34,35 +34,9 @@ class FC(torch.nn.Sequential):
         params = locals()
         del params['self']
         self.__dict__ = params
-        if isinstance(hidden_width, list) and len(hidden_width) != hidden_depth:
-            raise ValueError("hidden width must be an int or a list with len(depth)")
-        elif isinstance(hidden_width, int) and hidden_depth > 0:
-            hidden_width = [hidden_width] * hidden_depth
-        modules = []
-        output_dim = target_dim * 2
-        if hidden_depth == 0:
-            modules.append(("linear1", Linear(input_dim, output_dim)))
-        else:
-            modules.append(("linear1", Linear(input_dim, hidden_width[0])))
-            for i in range(1, hidden_depth + 1):
-                if batch_norm:
-                    modules.append((f"bn{i}", BatchNorm1d(hidden_width[i - 1])))
-                if activation == 'relu':
-                    modules.append((f"relu{i}", ReLU()))
-                elif activation == 'swish':
-                    modules.append((f"swish{i}", Swish()))
-                else:
-                    raise ValueError("Unrecognized activation")
-                modules.append(
-                    (
-                        f"linear{i + 1}",
-                        Linear(
-                            hidden_width[i - 1], hidden_width[i] if i != hidden_depth else output_dim
-                        ),
-                    )
-                )
-        modules = OrderedDict(modules)
-        super().__init__(modules)
+        output_dim = 2 * target_dim
+        super().__init__(input_dim, output_dim, hidden_width,
+                         hidden_depth, activation, batch_norm)
 
         # initialize other parameters and buffers
         self.register_parameter("max_logvar", Parameter(torch.tensor([0.5])))

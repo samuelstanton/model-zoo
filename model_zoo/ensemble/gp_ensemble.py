@@ -1,11 +1,11 @@
 import torch
 
 from model_zoo.ensemble import BaseEnsemble
-from model_zoo.zoo import DeepFeatureSVGP
+from model_zoo.regression import DeepFeatureSVGP
 
 
 class GPEnsemble(BaseEnsemble):
-    """ Ensemble of SVGP + DKL models
+    """ Ensemble of SVGP + DKL regression models
     """
     def __init__(self, input_dim, target_dim, num_components,
                  num_elites, submodule_params):

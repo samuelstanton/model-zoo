@@ -1,11 +1,11 @@
 from torch.nn import ModuleList
 
 from model_zoo.ensemble import BaseEnsemble
-from model_zoo.zoo import FC
+from model_zoo.regression import FCRegression
 
 
 class FCEnsemble(BaseEnsemble):
-    """ Ensemble of fully-connected neural networks
+    """ Ensemble of fully-connected neural net regression models
     """
     def __init__(self, input_dim, target_dim, num_components,
                  num_elites, submodule_params):
@@ -19,7 +19,7 @@ class FCEnsemble(BaseEnsemble):
         """
         super().__init__(input_dim, target_dim, num_components, num_elites)
         components = [
-            FC(
+            FCRegression(
                 input_dim,
                 target_dim,
                 batch_norm=False,

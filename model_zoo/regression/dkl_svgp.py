@@ -1,11 +1,11 @@
 import math
-import numpy as np
 import torch
 
 from copy import deepcopy
 
 from torch.utils.data import DataLoader, TensorDataset
 from torch.optim import Adam
+
 from gpytorch.distributions.multivariate_normal import MultivariateNormal
 from gpytorch.kernels import RBFKernel, ScaleKernel
 from gpytorch.means import ConstantMean
@@ -14,23 +14,28 @@ from gpytorch.constraints import GreaterThan
 from gpytorch.models import GP
 from gpytorch.variational import VariationalStrategy, MeanFieldVariationalDistribution
 from gpytorch.mlls import VariationalELBO, PredictiveLogLikelihood
-from .fc import FC
+
 from sklearn.cluster import MiniBatchKMeans
+
+from model_zoo.architecture import FCNet
 
 
 class DeepFeatureSVGP(GP):
-    def __init__(
-            self,
-            input_dim: int,
-            feature_dim: int,
-            label_dim: int,
-            hidden_width: int or list,
-            hidden_depth: int,
-            n_inducing: int,
-            batch_size: int,
-            max_epochs_since_update,
-            **kwargs
-    ):
+    """ Stochastic Variational Gaussian Process regression model w/ deep kernel learning
+    """
+    def __init__(self, input_dim, feature_dim, label_dim, hidden_width, hidden_depth,
+                 n_inducing, batch_size, max_epochs_since_update, **kwargs):
+        """
+        Args:
+            input_dim (int)
+            feature_dim (int): dimension of deep kernel features
+            label_dim (int)
+            hidden_depth (int)
+            hidden_width (int or list)
+            n_inducing (int): number of inducing points for variational approximation
+            batch_size (int)
+            max_epochs_since_update (int)
+        """
         params = locals()
         del params['self']
         self.__dict__ = params
@@ -42,9 +47,9 @@ class DeepFeatureSVGP(GP):
             noise_constraint=noise_constraint
         )
 
-        self.nn = FC(
-            input_shape=torch.Size([input_dim]),
-            output_shape=torch.Size([feature_dim]),
+        self.nn = FCNet(
+            input_dim,
+            output_dim=label_dim,
             hidden_width=hidden_width,
             hidden_depth=hidden_depth,
             batch_norm=True
@@ -77,11 +82,23 @@ class DeepFeatureSVGP(GP):
         self._eval_ckpt = deepcopy(self.state_dict())
 
     def forward(self, features):
+        """
+        Args:
+            features (torch.Tensor): [n x feature_dim]
+        Returns:
+            GPyTorch MultivariateNormal distribution
+        """
         mean = self.mean_module(features)
         covar = self.covar_module(features)
         return MultivariateNormal(mean, covar)
 
     def __call__(self, inputs):
+        """
+        Args:
+            inputs (torch.Tensor): [n x input_dim]
+        Returns
+            GPyTorch MultivariateNormal distribution
+        """
         features = (inputs - self.input_mean) / self.input_std
         features = self.nn(features)
         features = self.batch_norm(features)
@@ -97,6 +114,14 @@ class DeepFeatureSVGP(GP):
         return MultivariateNormal(mean, covar)
 
     def predict(self, np_inputs, latent=False):
+        """
+        Args:
+            np_inputs (np.array): [n x input_dim]
+            latent (bool): if True, predict latent function values (rather than label values)
+        Returns:
+            mean (np.array): [n x label_dim]
+            var (np.array): [n x label_dim]
+        """
         inputs = torch.tensor(np_inputs, dtype=torch.get_default_dtype())
         with torch.no_grad():
             pred_dist = self(inputs) if latent else self.likelihood(self(inputs))
@@ -104,12 +129,7 @@ class DeepFeatureSVGP(GP):
         var = pred_dist.variance * self.label_std.pow(2).view(self.label_dim, 1)
         return mean.t().cpu().numpy(), var.t().cpu().numpy()
 
-    def fit(
-        self,
-        train_data,
-        holdout_data,
-        objective='elbo',
-        max_epochs: int = None,
+    def fit(self, train_data, holdout_data, objective='elbo', max_epochs: int = None,
         normalize: bool = True,
         early_stopping: bool = False,
         pretrain: bool = False,

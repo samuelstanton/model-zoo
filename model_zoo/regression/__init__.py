@@ -1,8 +1,8 @@
 from .dkl_svgp import DeepFeatureSVGP
-from .fc import FC
+from .fc_regression import FCRegression
 
 
 __all__ = [
     "DeepFeatureSVGP",
-    "FC"
+    "FCRegression",
 ]
