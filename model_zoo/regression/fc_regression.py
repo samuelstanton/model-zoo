@@ -20,7 +20,7 @@ class FCRegression(FCNet):
     """
 
     def __init__(self, input_dim, target_dim, hidden_width, hidden_depth=4,
-                 activation="relu", batch_norm=True, max_epochs_since_update=5) -> None:
+                 activation="relu", batch_norm=True, init="default", max_epochs_since_update=5) -> None:
         """
         Args:
             input_dim (int)
@@ -33,12 +33,12 @@ class FCRegression(FCNet):
         """
         output_dim = 2 * target_dim
         super().__init__(input_dim, output_dim, hidden_width,
-                         hidden_depth, activation, batch_norm)
+                         hidden_depth, activation, batch_norm, init)
         self.max_epochs_since_update = max_epochs_since_update
 
         # initialize other parameters and buffers
-        self.register_parameter("max_logvar", Parameter(torch.tensor([0.5])))
-        self.register_parameter("min_logvar", Parameter(torch.tensor([-10.])))
+        self.register_parameter("max_logvar", Parameter(torch.tensor((0.5))))
+        self.register_parameter("min_logvar", Parameter(torch.tensor((-10.))))
         self.register_buffer("input_mean", torch.zeros(input_dim))
         self.register_buffer("input_std", torch.ones(input_dim))
         self.register_buffer("target_mean", torch.zeros(target_dim))
@@ -105,19 +105,22 @@ class FCRegression(FCNet):
             torch.tensor(holdout_data[1], dtype=torch.get_default_dtype())
         )
 
-        def obj_fn(pred_dist, targets):
-            log_prob = pred_dist.log_prob(targets).mean()
-            aux_loss = logvar_penalty_coeff * (self.max_logvar - self.min_logvar)
-            return log_prob - aux_loss
+        def loss_fn(pred_dist, targets):
+            # log_prob = pred_dist.log_prob(targets).mean()
+            target_loss = (pred_dist.mean - targets).pow(2).div(pred_dist.variance).mean()
+            var_loss = pred_dist.variance.log().mean()
+            var_bound_loss = logvar_penalty_coeff * (self.max_logvar - self.min_logvar)
+            return target_loss + var_loss + var_bound_loss
+
 
         if holdout_data:
             val_x, val_y = holdout_data[:]
-            eval_loss, eval_mse = self._get_val_metrics(obj_fn, torch.nn.MSELoss(), val_x, val_y)
+            eval_loss, eval_mse = self._get_val_metrics(loss_fn, torch.nn.MSELoss(), val_x, val_y)
             if verbose:
                 print(f"[ ProbMLP ] initial holdout loss: {eval_loss:.4f}, MSE: {eval_mse:.4f}")
         else:
             eval_loss, eval_mse = 1e6, 1e6
-        snapshot = (0, eval_loss)
+        snapshot = (0, eval_mse)
 
         self.load_state_dict(self._train_ckpt)
 
@@ -130,14 +133,14 @@ class FCRegression(FCNet):
             print(f"[ ProbMLP ] training on {len(train_data)} examples")
         optimizer = Adam(self.optim_param_groups, lr=lr)
         metrics, snapshot = self._training_loop(train_data, holdout_data, batch_size,
-                                                optimizer, obj_fn, snapshot, max_epochs,
+                                                optimizer, loss_fn, snapshot, max_epochs,
                                                 early_stopping, max_steps)
 
         self._train_ckpt = deepcopy(self.state_dict())
         self.load_state_dict(self._eval_ckpt)
         self.train()
         if holdout_data:
-            eval_loss, eval_mse = self._get_val_metrics(obj_fn, torch.nn.MSELoss(), val_x, val_y)
+            eval_loss, eval_mse = self._get_val_metrics(loss_fn, torch.nn.MSELoss(), val_x, val_y)
             metrics['holdout_mse'] = eval_mse
             metrics['holdout_loss'] = eval_loss
 
@@ -150,7 +153,7 @@ class FCRegression(FCNet):
         return metrics
 
     def _training_loop(self, train_dataset, val_dataset, batch_size, optimizer,
-                       obj_fn, snapshot, max_epochs, early_stopping, max_steps):
+                       loss_fn, snapshot, max_epochs, early_stopping, max_steps):
         metrics = {
             'train_loss': [],
             'val_loss': [],
@@ -175,7 +178,7 @@ class FCRegression(FCNet):
                 optimizer.zero_grad()
                 pred_mean, pred_var = self(inputs)
                 pred_dist = Normal(pred_mean, pred_var.sqrt())
-                loss = -obj_fn(pred_dist, labels)
+                loss = loss_fn(pred_dist, labels)
                 loss.backward()
                 optimizer.step()
 
@@ -190,10 +193,10 @@ class FCRegression(FCNet):
                 steps += 1
 
             if val_dataset:
-                val_loss, val_mse = self._get_val_metrics(obj_fn, mse_fn, val_x, val_y)
+                val_loss, val_mse = self._get_val_metrics(loss_fn, mse_fn, val_x, val_y)
                 metrics['val_loss'].append(val_loss)
                 metrics['val_mse'].append(val_mse)
-            conv_metric = val_loss if early_stopping else avg_train_loss
+            conv_metric = val_mse if early_stopping else avg_train_loss
 
             snapshot, exit_training = self.save_best(snapshot, epoch, conv_metric)
             epoch += 1
@@ -203,12 +206,12 @@ class FCRegression(FCNet):
 
         return metrics, snapshot
 
-    def _get_val_metrics(self, obj_fn, mse_fn, inputs, targets):
+    def _get_val_metrics(self, loss_fn, mse_fn, inputs, targets):
         with torch.no_grad():
             self.eval()
             pred_mean, pred_var = self(inputs)
             pred_dist = Normal(pred_mean, pred_var.sqrt())
-            val_loss = -obj_fn(pred_dist, targets)
+            val_loss = loss_fn(pred_dist, targets)
             val_mse = mse_fn(pred_mean, targets)
         return [val_loss.item(), val_mse.item()]
 

@@ -1,3 +1,4 @@
+import math
 import torch
 
 from collections import OrderedDict
@@ -5,12 +6,32 @@ from collections import OrderedDict
 from torch.nn import Linear, BatchNorm1d, ReLU
 
 
+def keras_dense_init(m):
+    if isinstance(m, Linear):
+        torch.nn.init.xavier_uniform_(m.weight.data)
+        if hasattr(m.bias, 'data'):
+            m.bias.data.fill_(0.0)
+
+
+def trunc_normal_init(m):
+    if isinstance(m, Linear):
+        input_dim = m.weight.shape[-1]
+        std = 1 / (2 * math.sqrt(input_dim))
+        u_1 = torch.rand(m.weight.size()) * (1 - math.exp(-2)) + math.exp(-2)
+        u_2 = torch.rand(m.weight.size())
+        z = torch.sqrt(-2 * u_1.log()) * torch.cos(2 * math.pi * u_2)
+        m.weight.data.copy_(std * z)
+
+        if hasattr(m.bias, "data"):
+            m.bias.data.fill_(0.)
+
+
 class FCNet(torch.nn.Sequential):
     """ Basic fully-connected neural network architecture
     """
 
     def __init__(self, input_dim, output_dim, hidden_width, hidden_depth=4,
-                 activation="relu", batch_norm=True) -> None:
+                 activation="relu", batch_norm=True, init='default') -> None:
         """
         Args:
             input_dim (int)
@@ -50,6 +71,12 @@ class FCNet(torch.nn.Sequential):
                 ))
         modules = OrderedDict(modules)
         super().__init__(modules)
+        if init == 'keras':
+            print("USING KERAS DENSE INITIALIZATION")
+            self.apply(keras_dense_init)
+        elif init == 'trunc_normal':
+            print("USING TRUNCATED NORMAL INITIALIZATION")
+            self.apply(trunc_normal_init)
 
     def forward(self, inputs):
         assert torch.is_tensor(inputs) and inputs.dim() == 2
