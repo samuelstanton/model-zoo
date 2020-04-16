@@ -114,3 +114,6 @@ class BaseEnsemble(torch.nn.Module):
         pred_var = pred_var[element_idx, np.arange(n)]
         samples = np.random.normal(loc=pred_mean, scale=np.sqrt(pred_var))
         return samples
+
+    def reset(self):
+        pass
