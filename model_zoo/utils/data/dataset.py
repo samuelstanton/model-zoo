@@ -1,4 +1,7 @@
 import numpy as np
+import torch
+
+from torch.utils.data import DataLoader
 
 
 class Dataset(object):
@@ -76,10 +79,17 @@ class Dataset(object):
         holdout_data = inputs[:self.n_holdout], targets[:self.n_holdout]
         return train_data, holdout_data
 
+    def get_loader(self, batch_size):
+        inputs, targets = self.train_data
+        dataset = torch.utils.data.TensorDataset(
+            torch.tensor(inputs, dtype=torch.get_default_dtype()),
+            torch.tensor(targets, dtype=torch.get_default_dtype())
+        )
+        return DataLoader(dataset, shuffle=True, batch_size=batch_size, drop_last=True)
+
+    def get_holdout_data(self):
+        return self.holdout_inputs, self.holdout_targets
+
     @property
     def train_data(self):
         return self.train_inputs, self.train_targets
-
-    @property
-    def holdout_data(self):
-        return self.holdout_inputs, self.holdout_targets

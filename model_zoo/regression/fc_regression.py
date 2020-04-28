@@ -5,11 +5,12 @@ from copy import deepcopy
 
 from torch.nn import Linear, Parameter
 from torch.nn.functional import softplus
-from torch.utils.data import DataLoader
 from torch.distributions import Normal
 from torch.optim import Adam
 
 from model_zoo.architecture import FCNet
+from model_zoo.utils.data import SeqDataset
+from model_zoo.utils.training import save_best
 
 
 class FCRegression(FCNet):
@@ -81,8 +82,7 @@ class FCRegression(FCNet):
             mean, var = self(inputs)
         return mean.cpu().numpy(), var.cpu().numpy()
 
-    def fit(self, train_data, holdout_data, batch_size, lr, logvar_penalty_coeff,
-            early_stopping=True, normalize=True, max_epochs=None, max_steps=None, verbose=False):
+    def fit(self, dataset, fit_params, verbose=False):
         """
         Args:
             train_data (tuple of nd.arrays): ([n_train x input_dim], [n_train x target_dim])
@@ -96,51 +96,45 @@ class FCRegression(FCNet):
             max_steps (int): max number of optimizer steps to take during training
             verbose (bool)
         """
-        train_data = torch.utils.data.TensorDataset(
-            torch.tensor(train_data[0], dtype=torch.get_default_dtype()),
-            torch.tensor(train_data[1], dtype=torch.get_default_dtype())
-        )
-        holdout_data = torch.utils.data.TensorDataset(
-            torch.tensor(holdout_data[0], dtype=torch.get_default_dtype()),
-            torch.tensor(holdout_data[1], dtype=torch.get_default_dtype())
-        )
+        if isinstance(dataset, SeqDataset):
+            dataset.subseq_format('flat')
+        train_loader = dataset.get_loader(fit_params['batch_size'])
+        holdout_data = [torch.tensor(array, dtype=torch.get_default_dtype()) for array in dataset.get_holdout_data()]
 
         def loss_fn(pred_dist, targets):
-            # log_prob = pred_dist.log_prob(targets).mean()
             target_loss = (pred_dist.mean - targets).pow(2).div(pred_dist.variance).mean()
             var_loss = pred_dist.variance.log().mean()
-            var_bound_loss = logvar_penalty_coeff * (self.max_logvar - self.min_logvar)
+            beta = fit_params['logvar_penalty_coeff']
+            var_bound_loss = beta * (self.max_logvar - self.min_logvar)
             return target_loss + var_loss + var_bound_loss
 
-
         if holdout_data:
-            val_x, val_y = holdout_data[:]
-            eval_loss, eval_mse = self._get_val_metrics(loss_fn, torch.nn.MSELoss(), val_x, val_y)
+            h_inputs, h_targets = holdout_data
+            eval_loss, eval_mse = self._get_val_metrics(loss_fn, torch.nn.MSELoss(), h_inputs, h_targets)
             if verbose:
                 print(f"[ ProbMLP ] initial holdout loss: {eval_loss:.4f}, MSE: {eval_mse:.4f}")
         else:
             eval_loss, eval_mse = 1e6, 1e6
-        snapshot = (0, eval_mse)
-
+        snapshot = (0, eval_mse, self._eval_ckpt)
         self.load_state_dict(self._train_ckpt)
 
-        if normalize:
-            train_inputs, train_targets = train_data[:]
-            self.input_mean, self.input_std = train_inputs.mean(0), train_inputs.std(0)
-            self.target_mean, self.target_std = train_targets.mean(0), train_targets.std(0)
+        # TODO fix this
+        # if fit_params['normalize']:
+        #     train_inputs, train_targets = dataset[:]
+        #     self.input_mean, self.input_std = train_inputs.mean(0), train_inputs.std(0)
+        #     self.target_mean, self.target_std = train_targets.mean(0), train_targets.std(0)
 
         if verbose:
-            print(f"[ ProbMLP ] training on {len(train_data)} examples")
-        optimizer = Adam(self.optim_param_groups, lr=lr)
-        metrics, snapshot = self._training_loop(train_data, holdout_data, batch_size,
-                                                optimizer, loss_fn, snapshot, max_epochs,
-                                                early_stopping, max_steps)
+            print(f"[ ProbMLP ] training on {len(dataset)} example sequences")
+        optimizer = Adam(self.optim_param_groups, lr=fit_params['lr'])
+        metrics, snapshot = self._training_loop(train_loader, optimizer, loss_fn, holdout_data, snapshot, fit_params)
 
         self._train_ckpt = deepcopy(self.state_dict())
+        _, _, self._eval_ckpt = snapshot
         self.load_state_dict(self._eval_ckpt)
         self.train()
         if holdout_data:
-            eval_loss, eval_mse = self._get_val_metrics(loss_fn, torch.nn.MSELoss(), val_x, val_y)
+            eval_loss, eval_mse = self._get_val_metrics(loss_fn, torch.nn.MSELoss(), h_inputs, h_targets)
             metrics['holdout_mse'] = eval_mse
             metrics['holdout_loss'] = eval_loss
 
@@ -152,27 +146,33 @@ class FCRegression(FCNet):
         self.eval()
         return metrics
 
-    def _training_loop(self, train_dataset, val_dataset, batch_size, optimizer,
-                       loss_fn, snapshot, max_epochs, early_stopping, max_steps):
+    def _training_loop(self, train_loader, optimizer, loss_fn, holdout_data, snapshot, fit_params):
         metrics = {
             'train_loss': [],
             'val_loss': [],
             'val_mse': [],
         }
-        exit_training = False
-        num_batches = math.ceil(len(train_dataset) / batch_size)
-        epoch = snapshot[0] + 1
-        avg_train_loss = None
-        alpha = 2 / (num_batches + 1)
-        mse_fn = torch.nn.MSELoss()
-        steps = 1
-        dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        if val_dataset:
-            val_x, val_y = val_dataset[:]
+        if holdout_data:
+            h_inputs, h_targets = holdout_data
 
+        num_batches = len(train_loader)
+        alpha = 2 / (num_batches + 1)
+        avg_train_loss = None
+        mse_fn = torch.nn.MSELoss()
+
+        fit_params = dict(fit_params)
+        max_steps = fit_params.setdefault('max_steps', None)
+        max_epochs = fit_params.setdefault('max_epochs', None)
+        early_stopping = fit_params.setdefault('early_stopping', False)
+        wait_epochs = fit_params['wait_epochs']
+        wait_tol = fit_params['wait_tol']
+
+        steps = 1
+        epoch = snapshot[0]
+        exit_training = False
         while not exit_training:
             self.train()
-            for inputs, labels in dataloader:
+            for inputs, labels in train_loader:
                 if inputs.shape[0] <= 1:
                     continue
                 optimizer.zero_grad()
@@ -192,14 +192,14 @@ class FCRegression(FCNet):
                     return metrics, snapshot
                 steps += 1
 
-            if val_dataset:
-                val_loss, val_mse = self._get_val_metrics(loss_fn, mse_fn, val_x, val_y)
+            if holdout_data:
+                val_loss, val_mse = self._get_val_metrics(loss_fn, mse_fn, h_inputs, h_targets)
                 metrics['val_loss'].append(val_loss)
                 metrics['val_mse'].append(val_mse)
             conv_metric = val_mse if early_stopping else avg_train_loss
 
-            snapshot, exit_training = self.save_best(snapshot, epoch, conv_metric)
             epoch += 1
+            exit_training, snapshot = save_best(self, conv_metric, epoch, snapshot, wait_epochs, wait_tol)
             metrics['train_loss'].append(avg_train_loss)
             if exit_training or (max_epochs and epoch == max_epochs):
                 break
@@ -215,16 +215,16 @@ class FCRegression(FCNet):
             val_mse = mse_fn(pred_mean, targets)
         return [val_loss.item(), val_mse.item()]
 
-    def save_best(self, snapshot, epoch, current_loss):
-        exit_training = False
-        last_update, best_loss = snapshot
-        improvement = (best_loss - current_loss) / abs(best_loss)
-        if improvement > 0.001:
-            snapshot = (epoch, current_loss)
-            self._eval_ckpt = deepcopy(self.state_dict())
-        if epoch == snapshot[0] + self.max_epochs_since_update:
-            exit_training = True
-        return snapshot, exit_training
+    # def save_best(self, snapshot, epoch, current_loss):
+    #     exit_training = False
+    #     last_update, best_loss = snapshot
+    #     improvement = (best_loss - current_loss) / abs(best_loss)
+    #     if improvement > 0.001:
+    #         snapshot = (epoch, current_loss)
+    #         self._eval_ckpt = deepcopy(self.state_dict())
+    #     if epoch == snapshot[0] + self.max_epochs_since_update:
+    #         exit_training = True
+    #     return snapshot, exit_training
 
     @property
     def optim_param_groups(self):

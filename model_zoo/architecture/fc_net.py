@@ -82,6 +82,9 @@ class FCNet(torch.nn.Sequential):
         assert torch.is_tensor(inputs) and inputs.dim() == 2
         return super().forward(inputs)
 
+    def reset(self):
+        pass
+
 
 class Swish(torch.nn.Module):
     def __init__(self):

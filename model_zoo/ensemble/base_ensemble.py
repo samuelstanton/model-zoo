@@ -28,20 +28,20 @@ class BaseEnsemble(torch.nn.Module):
         self.num_elites = num_elites
         self.components = None
 
-    def fit(self, dataset, fit_kwargs):
+    def fit(self, dataset, fit_params):
         """
         Args:
-            dataset (model_zoo.utils.Dataset)
-            fit_kwargs (dict): parameters to be passed to `component.fit`
+            dataset (model_zoo.utils.data.SeqDataset)
+            fit_params (dict): parameters to be passed to `component.fit`
         """
-        train_inputs, train_targets = dataset.train_data
+        # train_inputs, train_targets = dataset.train_data
         holdout_losses = np.empty((len(self.components),))
         holdout_mses = np.empty_like(holdout_losses)
         for i, component in enumerate(self.components):
-            boot_idx = dataset.bootstrap_idxs[i]
-            bootstrap_data = train_inputs[boot_idx], train_targets[boot_idx]
-            metrics = component.fit(bootstrap_data, dataset.holdout_data, **fit_kwargs)
-            holdout_losses[i] = metrics['holdout_loss']
+            # boot_idx = dataset.bootstrap_idxs[i]
+            # bootstrap_data = train_inputs[boot_idx], train_targets[boot_idx]
+            metrics = component.fit(dataset, fit_params)
+            holdout_losses[i] = metrics['holdout_loss'][-1]
             holdout_mses[i] = metrics['holdout_mse']
 
         # rank components by holdout loss
@@ -113,6 +113,7 @@ class BaseEnsemble(torch.nn.Module):
         pred_mean = pred_mean[element_idx, np.arange(n)]
         pred_var = pred_var[element_idx, np.arange(n)]
         samples = np.random.normal(loc=pred_mean, scale=np.sqrt(pred_var))
+
         return samples
 
     def reset(self):

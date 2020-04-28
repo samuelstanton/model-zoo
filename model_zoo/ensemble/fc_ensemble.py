@@ -1,7 +1,8 @@
 from torch.nn import ModuleList
 
 from model_zoo.ensemble import BaseEnsemble
-from model_zoo.regression import FCRegression
+from model_zoo.regression import MaxLikelihoodRegression
+from model_zoo.architecture import FCNet
 
 
 class FCEnsemble(BaseEnsemble):
@@ -19,11 +20,11 @@ class FCEnsemble(BaseEnsemble):
         """
         super().__init__(input_dim, target_dim, num_components, num_elites)
         components = [
-            FCRegression(
+            MaxLikelihoodRegression(
                 input_dim,
                 target_dim,
-                batch_norm=False,
-                **submodule_params
+                FCNet,
+                submodule_params
             ) for _ in range(num_components)
         ]
         self.components = ModuleList(components)
