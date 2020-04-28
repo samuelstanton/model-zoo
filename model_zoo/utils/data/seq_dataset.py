@@ -1,7 +1,8 @@
 import random
 import numpy as np
+import torch
 
-from torch.utils.data import Dataset, WeightedRandomSampler, BatchSampler, DataLoader
+from torch.utils.data import Dataset, WeightedRandomSampler, BatchSampler, DataLoader, TensorDataset
 
 
 class SeqDataset(Dataset):
@@ -100,8 +101,14 @@ class SeqDataset(Dataset):
         return BatchSampler(w_sampler, batch_size, drop_last=True)
 
     def get_loader(self, batch_size):
-        sampler = self.get_sampler(batch_size)
-        return DataLoader(self, batch_sampler=sampler)
+        # sampler = self.get_sampler(batch_size)
+        inputs, targets = format_seqs(self.train_input_seqs, self.train_target_seqs,
+                                      self.train_seq_len, self._subseq_format)
+        dataset = TensorDataset(
+            torch.tensor(inputs, dtype=torch.get_default_dtype()),
+            torch.tensor(targets, dtype=torch.get_default_dtype())
+        )
+        return DataLoader(dataset, batch_size=batch_size, drop_last=True, shuffle=True)
 
     def subseq_format(self, format):
         if format == "sequential":
@@ -113,4 +120,23 @@ class SeqDataset(Dataset):
             raise ValueError("unrecognized format type")
 
     def get_holdout_data(self):
-        return self.sample_holdout_subseqs()
+        return format_seqs(self.holdout_input_seqs, self.holdout_target_seqs,
+                           self.train_seq_len, self._subseq_format)
+
+
+def format_seqs(input_seqs, target_seqs, subseq_len, subseq_format='sequential'):
+    seq_lens = [seq.shape[0] for seq in input_seqs]
+    num_subseqs = [seq_len // subseq_len for seq_len in seq_lens]
+    start_idxs = [np.random.randint(0, (seq_len % subseq_len) + 1) for seq_len in seq_lens]
+    stop_idxs = [start + num_chunks * subseq_len for start, num_chunks in zip(start_idxs, num_subseqs)]
+    trimmed_inputs = [seq[start:stop] for seq, start, stop in zip(input_seqs, start_idxs, stop_idxs)]
+    trimmed_targets = [seq[start:stop] for seq, start, stop in zip(target_seqs, start_idxs, stop_idxs)]
+
+    input_subseqs = [np.stack(np.split(seq, num_chunks)) for seq, num_chunks in zip(trimmed_inputs, num_subseqs)]
+    target_subseqs = [np.stack(np.split(seq, num_chunks)) for seq, num_chunks in zip(trimmed_targets, num_subseqs)]
+
+    res = [np.concatenate(input_subseqs), np.concatenate(target_subseqs)]
+    if subseq_format == 'flat':
+        return [array.squeeze(1) for array in res]
+    else:
+        return res

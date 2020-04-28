@@ -71,7 +71,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
             mse = 0
             for i in range(seq_len):
                 mean, var = self.predict(np_inputs[:, i])
-                mse += np.power(mean - np_targets[:, i], 2).mean()
+                mse += np.power(mean - np_targets[:, i], 2).mean() / seq_len
 
         inputs = torch.tensor(np_inputs, dtype=torch.get_default_dtype())
         targets = torch.tensor(np_targets, dtype=torch.get_default_dtype())
@@ -89,7 +89,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
         train_loader = dataset.get_loader(fit_params['batch_size'])
         optimizer = torch.optim.Adam(self._optim_p_groups, lr=fit_params["lr"])
 
-        holdout_data = dataset.sample_holdout_subseqs()
+        holdout_data = dataset.get_holdout_data()
         holdout_mse = self.validate(*holdout_data)["val_mse"]
         snapshot = (0, holdout_mse, self.eval_checkpoint)
         self.load_state_dict(self.train_checkpoint)
@@ -166,7 +166,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
 
             self.eval()
             holdout_metrics = self.validate(*holdout_data)
-            exit_training, snapshot = save_best(self, holdout_metrics['val_mse'], epoch, snapshot, wait_epochs, wait_tol)
+            exit_training, snapshot = save_best(self, holdout_metrics['val_loss'], epoch, snapshot, wait_epochs, wait_tol)
             metrics['train_loss'].append(train_loss)
             metrics['holdout_loss'].append(holdout_metrics['val_loss'])
             epoch += 1
