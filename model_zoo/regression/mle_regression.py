@@ -3,21 +3,25 @@ import torch
 
 from torch import nn
 from copy import deepcopy
+import model_zoo
 from model_zoo.utils.training import save_best
 
 
 class MaxLikelihoodRegression(torch.nn.Module):
-    def __init__(self, input_dim, target_dim, model_class, model_kwargs, deterministic=False):
+    def __init__(self, input_dim, target_dim, model_class, model_kwargs, mode='prob'):
         super().__init__()
-        self._deterministic = deterministic
+        self._deterministic = (mode == 'det')
         output_dim = 2 * target_dim
-        self.model = model_class(input_dim, output_dim, **model_kwargs)
+        model_constructor = getattr(model_zoo.architecture, model_class)
+        self.model = model_constructor(input_dim, output_dim, **model_kwargs)
 
         self.register_parameter("max_logvar", nn.Parameter(torch.tensor((0.5))))
         self.register_parameter("min_logvar", nn.Parameter(torch.tensor((-10.))))
 
-        self.input_stat_tracker = nn.BatchNorm1d(input_dim, affine=False)
-        self.target_stat_tracker = nn.BatchNorm1d(target_dim, affine=False)
+        self.register_buffer("input_mean", torch.zeros(input_dim, dtype=torch.get_default_dtype()))
+        self.register_buffer("input_std", torch.ones(input_dim, dtype=torch.get_default_dtype()))
+        self.register_buffer("target_mean", torch.zeros(target_dim, dtype=torch.get_default_dtype()))
+        self.register_buffer("target_std", torch.ones(target_dim, dtype=torch.get_default_dtype()))
 
         self.train_checkpoint = deepcopy(self.state_dict())
         self.eval_checkpoint = deepcopy(self.state_dict())
@@ -30,24 +34,23 @@ class MaxLikelihoodRegression(torch.nn.Module):
             mean (torch.Tensor): [n x target_dim]
             var (torch.Tensor): [n x target_dim]
         """
-        assert torch.is_tensor(inputs) and inputs.dim() == 2
-        inputs = self.input_stat_tracker(inputs)
+        self._check_dim(inputs)
+        inputs = (inputs - self.input_mean) / self.input_std
         output = self.model.forward(inputs)
         mean, logvar = output.chunk(2, dim=-1)
         logvar = self.max_logvar - nn.functional.softplus(self.max_logvar - logvar)
         logvar = self.min_logvar + nn.functional.softplus(logvar - self.min_logvar)
-        # mean = mean * self.target_var.sqrt() + self.target_mean
-        # var = logvar.exp() * self.target_var
-        var = logvar.exp()
+        mean = mean * self.target_std + self.target_mean
+        var = logvar.exp() * self.target_std ** 2
         return mean, var
 
     def predict(self, np_inputs):
         """
         Args:
-            np_inputs (np.array): [n x input_dim]
+            np_inputs (np.array): [num_batch x input_dim] or [num_batch x seq_len x input_dim]
         Returns:
-            mean (np.array): [n x target_dim]
-            var (np.array): [n x target_dim]
+            mean (np.array): [*batch_shape x target_dim]
+            var (np.array): [*batch_shape x target_dim]
         """
         inputs = torch.tensor(np_inputs, dtype=torch.get_default_dtype())
         with torch.no_grad():
@@ -61,22 +64,14 @@ class MaxLikelihoodRegression(torch.nn.Module):
         return res
 
     def validate(self, np_inputs, np_targets):
-        self._check_dim(np_inputs)
-        self.model.reset()
-        if np_inputs.ndim == 2:
-            mean, var = self.predict(np_inputs)
-            mse = np.power(mean - np_targets, 2).mean()
-        else:
-            _, seq_len, _ = np_inputs.shape
-            mse = 0
-            for i in range(seq_len):
-                mean, var = self.predict(np_inputs[:, i])
-                mse += np.power(mean - np_targets[:, i], 2).mean() / seq_len
-
         inputs = torch.tensor(np_inputs, dtype=torch.get_default_dtype())
         targets = torch.tensor(np_targets, dtype=torch.get_default_dtype())
-        val_loss = self.loss_fn(inputs, targets, beta=1e-2)
-        metrics = {'val_mse': mse.item(), 'val_loss': val_loss.item()}
+        self.model.reset()
+        with torch.no_grad():
+            pred_mean, pred_var = self(inputs)
+            mse = (pred_mean - targets).pow(2).mean()
+            loss = self.loss_fn(inputs, targets, beta=1e-2)
+        metrics = {'val_mse': mse.item(), 'val_loss': loss.item()}
 
         return metrics
 
@@ -86,50 +81,39 @@ class MaxLikelihoodRegression(torch.nn.Module):
         :param fit_params (dict)
         :return:
         """
-        train_loader = dataset.get_loader(fit_params['batch_size'])
-        optimizer = torch.optim.Adam(self._optim_p_groups, lr=fit_params["lr"])
+        fit_params = dict(fit_params)
 
         holdout_data = dataset.get_holdout_data()
         holdout_mse = self.validate(*holdout_data)["val_mse"]
         snapshot = (0, holdout_mse, self.eval_checkpoint)
         self.load_state_dict(self.train_checkpoint)
 
+        normalize = fit_params.setdefault('normalize', True)
+        if normalize:
+            input_stats, target_stats = dataset.get_stats(compat_mode='torch')
+            self.input_mean, self.input_std = input_stats
+            self.target_mean, self.target_std = target_stats
+
         # main training loop
+        train_loader = dataset.get_loader(fit_params['batch_size'])
+        optimizer = torch.optim.Adam(self._optim_p_groups, lr=fit_params["lr"])
         snapshot, train_metrics = self._training_loop(train_loader, optimizer,
                                        holdout_data, snapshot, fit_params)
 
         self.train_checkpoint = deepcopy(self.state_dict())
         _, holdout_loss, self.eval_checkpoint = snapshot
-        fit_metrics = {"holdout_mse": holdout_loss}
-        fit_metrics.update(train_metrics)
         self.load_state_dict(self.eval_checkpoint)
         self.eval()
+        fit_metrics = {"holdout_mse": self.validate(*holdout_data)["val_mse"]}
+        fit_metrics.update(train_metrics)
         return fit_metrics
 
     def loss_fn(self, inputs, targets, beta):
         self._check_dim(inputs)
         self.model.reset()
-        if inputs.dim() == 2:
-            mean, var = self(inputs)
-            likelihood = self.likelihood(mean, var, targets)
-            mse = (mean - targets).pow(2).mean()
-
-        else:
-            n, seq_len, input_dim = inputs.shape
-            means, vars = [], []
-            for t in range(seq_len):
-                curr_input = inputs[:, t]
-                # curr_input = self.input_stat_tracker(inputs[:, t])
-                mean, var = self(curr_input)
-                means.append(mean)
-                vars.append(var)
-                # with torch.no_grad():
-                #     targets[:, t] = self.target_stat_tracker(targets[:, t])
-            means = torch.stack(means, dim=-2)
-            vars = torch.stack(vars, dim=-2)
-            likelihood = self.likelihood(means, vars, targets)
-            mse = (means - targets).pow(2).mean()
-
+        pred_mean, pred_var = self(inputs)
+        likelihood = self.likelihood(pred_mean, pred_var, targets)
+        mse = (pred_mean - targets).pow(2).mean()
         var_bound_loss = beta * (self.max_logvar - self.min_logvar)
         loss = mse if self._deterministic else (-likelihood + var_bound_loss)
         return loss
@@ -141,12 +125,11 @@ class MaxLikelihoodRegression(torch.nn.Module):
 
     def _training_loop(self, train_loader, optimizer, holdout_data, snapshot, fit_params):
         metrics = {'train_loss': [], 'holdout_loss': []}
-        fit_params = dict(fit_params)
-
         num_batches = len(train_loader)
         alpha = 2 / (num_batches + 1)  # exp. moving average parameter
         train_loss = None
 
+        early_stopping = fit_params.setdefault('early_stopping', False)
         wait_epochs = fit_params.setdefault('wait_epochs', None)
         wait_tol = fit_params.setdefault('wait_tol', None)
         max_grad_norm = fit_params.setdefault('max_grad_norm', None)
@@ -166,7 +149,8 @@ class MaxLikelihoodRegression(torch.nn.Module):
 
             self.eval()
             holdout_metrics = self.validate(*holdout_data)
-            exit_training, snapshot = save_best(self, holdout_metrics['val_loss'], epoch, snapshot, wait_epochs, wait_tol)
+            conv_metric = holdout_metrics['val_loss'] if early_stopping else train_loss
+            exit_training, snapshot = save_best(self, conv_metric, epoch, snapshot, wait_epochs, wait_tol)
             metrics['train_loss'].append(train_loss)
             metrics['holdout_loss'].append(holdout_metrics['val_loss'])
             epoch += 1
@@ -189,18 +173,5 @@ class MaxLikelihoodRegression(torch.nn.Module):
     def _optim_p_groups(self):
         return self.parameters()
 
-    @property
-    def input_mean(self):
-        return self.input_stat_tracker.running_mean
-
-    @property
-    def input_var(self):
-        return self.input_stat_tracker.running_var
-
-    @property
-    def target_mean(self):
-        return self.target_stat_tracker.running_mean
-
-    @property
-    def target_var(self):
-        return self.target_stat_tracker.running_var
+    def reset(self):
+        self.model.reset()

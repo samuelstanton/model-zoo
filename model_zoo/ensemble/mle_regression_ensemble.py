@@ -2,14 +2,13 @@ from torch.nn import ModuleList
 
 from model_zoo.ensemble import BaseEnsemble
 from model_zoo.regression import MaxLikelihoodRegression
-from model_zoo.architecture import FCNet
 
 
-class FCEnsemble(BaseEnsemble):
+class MaxLikelihoodRegEnsemble(BaseEnsemble):
     """ Ensemble of fully-connected neural net regression models
     """
     def __init__(self, input_dim, target_dim, num_components,
-                 num_elites, submodule_params):
+                 num_elites, model_class, model_kwargs, mode='prob'):
         """
         Args:
             input_dim (int)
@@ -23,8 +22,9 @@ class FCEnsemble(BaseEnsemble):
             MaxLikelihoodRegression(
                 input_dim,
                 target_dim,
-                FCNet,
-                submodule_params
+                model_class,
+                model_kwargs,
+                mode
             ) for _ in range(num_components)
         ]
         self.components = ModuleList(components)

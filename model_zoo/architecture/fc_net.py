@@ -79,8 +79,10 @@ class FCNet(torch.nn.Sequential):
             self.apply(trunc_normal_init)
 
     def forward(self, inputs):
-        assert torch.is_tensor(inputs) and inputs.dim() == 2
-        return super().forward(inputs)
+        assert torch.is_tensor(inputs) and inputs.dim() >= 2
+        batch_shape = inputs.shape[:-1]
+        res = super().forward(inputs.flatten(end_dim=-2))
+        return res.view(*batch_shape, -1)
 
     def reset(self):
         pass

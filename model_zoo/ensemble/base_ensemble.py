@@ -34,14 +34,13 @@ class BaseEnsemble(torch.nn.Module):
             dataset (model_zoo.utils.data.SeqDataset)
             fit_params (dict): parameters to be passed to `component.fit`
         """
-        # train_inputs, train_targets = dataset.train_data
         holdout_losses = np.empty((len(self.components),))
+        train_losses = np.empty_like(holdout_losses)
         holdout_mses = np.empty_like(holdout_losses)
         for i, component in enumerate(self.components):
-            # boot_idx = dataset.bootstrap_idxs[i]
-            # bootstrap_data = train_inputs[boot_idx], train_targets[boot_idx]
             metrics = component.fit(dataset, fit_params)
             holdout_losses[i] = metrics['holdout_loss'][-1]
+            train_losses[i] = metrics['train_loss'][-1]
             holdout_mses[i] = metrics['holdout_mse']
 
         # rank components by holdout loss
@@ -50,7 +49,8 @@ class BaseEnsemble(torch.nn.Module):
         print(f"holdout MSE: {holdout_mses}")
         print(f"best components: {self.component_rank[:self.num_elites]}")
         metrics = dict(
-            holdout_loss=holdout_losses.mean(),
+            train_loss=[train_losses.mean()],
+            holdout_loss=[holdout_losses.mean()],
             holdout_mse=holdout_mses.mean()
         )
         return metrics
@@ -91,12 +91,13 @@ class BaseEnsemble(torch.nn.Module):
         Returns:
             metrics (dict): MSE and log_prob of aggregate predictive distribution
         """
+        self.reset()
         pred_mean, pred_var = self.predict(inputs, factored=False)
         mse = ((pred_mean - targets) ** 2).mean()
-        log_prob = Normal.logpdf(targets, pred_mean, np.sqrt(pred_var)).mean()
+        nll = -Normal.logpdf(targets, pred_mean, np.sqrt(pred_var)).mean()
         metrics = dict(
             val_mse=mse.item(),
-            val_log_prob=log_prob.item()
+            val_loss=nll.item()
         )
         return metrics
 
@@ -117,4 +118,5 @@ class BaseEnsemble(torch.nn.Module):
         return samples
 
     def reset(self):
-        pass
+        for component in self.components:
+            component.reset()

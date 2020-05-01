@@ -1,10 +1,10 @@
 from .base_ensemble import BaseEnsemble
-from .fc_ensemble import FCEnsemble
+from .mle_regression_ensemble import MaxLikelihoodRegEnsemble
 from .gp_ensemble import GPEnsemble
 
 
 __all__ = [
     "BaseEnsemble",
-    "FCEnsemble",
+    "MaxLikelihoodRegEnsemble",
     "GPEnsemble"
 ]

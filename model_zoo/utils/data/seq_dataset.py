@@ -100,6 +100,20 @@ class SeqDataset(Dataset):
         w_sampler = WeightedRandomSampler(weights, num_samples=len(self))
         return BatchSampler(w_sampler, batch_size, drop_last=True)
 
+    def get_stats(self, compat_mode='np'):
+        inputs, targets = format_seqs(self.train_input_seqs, self.train_target_seqs,
+                                      self.train_seq_len, self._subseq_format)
+        input_dim = inputs.shape[-1]
+        target_dim = targets.shape[-1]
+        inputs = inputs.reshape(-1, input_dim)
+        targets = targets.reshape(-1, target_dim)
+        input_stats = [inputs.mean(0), inputs.std(0)]
+        target_stats = [targets.mean(0), targets.std(0)]
+        if compat_mode == 'torch':
+            input_stats = [torch.tensor(array, dtype=torch.get_default_dtype()) for array in input_stats]
+            target_stats = [torch.tensor(array, dtype=torch.get_default_dtype()) for array in target_stats]
+        return input_stats, target_stats
+
     def get_loader(self, batch_size):
         # sampler = self.get_sampler(batch_size)
         inputs, targets = format_seqs(self.train_input_seqs, self.train_target_seqs,

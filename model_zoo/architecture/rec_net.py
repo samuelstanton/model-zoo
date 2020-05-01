@@ -14,9 +14,6 @@ class RecurrentNet(nn.Module):
         self.rec_depth = rec_depth
         self.rec_hidden_dim = rec_hidden_dim
 
-        # self.encoder = MLP(input_dim, enc_hidden_dim, rec_hidden_dim, enc_depth)
-        # self.decoder = MLP(rec_hidden_dim, dec_hidden_dim, output_dim, dec_depth)
-        # self.apply(weight_init)  # Don't apply this to the recurrent unit.
         self.encoder = FCNet(input_dim, rec_hidden_dim, enc_hidden_dim, enc_depth, 'swish', batch_norm=False,
                              init='trunc_normal')
         self.encoder.add_module('final_activation', Swish())
@@ -27,9 +24,9 @@ class RecurrentNet(nn.Module):
         if rec_type is None:
             self.rec = DummyNet()
         elif rec_type == 'LSTM':
-            self.rec = nn.LSTM(rec_hidden_dim, rec_hidden_dim, num_layers=rec_depth)
+            self.rec = nn.LSTM(rec_hidden_dim, rec_hidden_dim, num_layers=rec_depth, batch_first=True)
         elif rec_type == 'GRU':
-            self.rec = nn.GRU(rec_hidden_dim, rec_hidden_dim, num_layers=rec_depth)
+            self.rec = nn.GRU(rec_hidden_dim, rec_hidden_dim, num_layers=rec_depth, batch_first=True)
         else:
             raise RuntimeError("unrecognized recurrent module type")
 
@@ -42,7 +39,7 @@ class RecurrentNet(nn.Module):
         self.rec.flatten_parameters()
 
     def init_hidden_state(self, inputs):
-        assert inputs.dim() == 2
+        assert inputs.dim() == 3
         n_batch = inputs.size(0)
 
         if self.rec_type is None:
@@ -61,11 +58,21 @@ class RecurrentNet(nn.Module):
         return h
 
     def forward(self, inputs):
+        seq_out = True
+        if inputs.dim() == 2:
+            inputs = inputs.unsqueeze(1)
+            seq_out = False
+        elif inputs.dim() > 3:
+            raise RuntimeError('inputs should be [num_batch x input_dim] or [num_batch x seq_len x input_dim]')
+
         if self.hidden_state is None:
             self.reset(inputs)
-        embedded_inputs = self.encoder(inputs).unsqueeze(0)
+
+        embedded_inputs = self.encoder(inputs)
         res, self.hidden_state = self.rec(embedded_inputs, self.hidden_state)
-        res = self.decoder(res.squeeze(0))
+        res = self.decoder(res)
+        res = res if seq_out else res.flatten(end_dim=-2)
+
         return res
 
     def reset(self, inputs=None):
