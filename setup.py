@@ -17,7 +17,4 @@ setup(
         "Programming Language :: Python :: 3",
     ],
     python_requires='>=3.6',
-    install_requires=[
-        'gpytorch @ git+https://github.com/cornellius-gp/gpytorch#egg=gpytorch-1.0.1'
-    ]
 )
