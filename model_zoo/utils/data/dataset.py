@@ -17,6 +17,7 @@ class Dataset(object):
         self.n_bootstraps = n_bootstraps
         self.bootstrap_size = bootstrap_size
         self.bootstrap_idxs = None
+        self.current_bootstrap = None
 
     def __len__(self):
         return self.n_train
@@ -81,6 +82,9 @@ class Dataset(object):
 
     def get_loader(self, batch_size):
         inputs, targets = self.train_data
+        if self.current_bootstrap is not None:
+            idxs = self.bootstrap_idxs[self.current_bootstrap]
+            inputs, targets = inputs[idxs], targets[idxs]
         dataset = torch.utils.data.TensorDataset(
             torch.tensor(inputs, dtype=torch.get_default_dtype()),
             torch.tensor(targets, dtype=torch.get_default_dtype())
@@ -93,3 +97,21 @@ class Dataset(object):
     @property
     def train_data(self):
         return self.train_inputs, self.train_targets
+
+    def use_bootstrap(self, bootstrap_id):
+        if bootstrap_id is None:
+            pass
+        elif isinstance(bootstrap_id, int):
+            assert bootstrap_id < self.n_bootstraps
+        else:
+            raise ValueError('bootstrap_id should be int or None')
+        self.current_bootstrap = bootstrap_id
+
+    def get_stats(self, compat_mode='np'):
+        inputs, targets = self.train_data
+        input_stats = (inputs.mean(0), np.clip(inputs.std(0), 1e-6, None))
+        target_stats = (targets.mean(0), np.clip(targets.std(0), 1e-6, None))
+        if compat_mode == 'torch':
+            input_stats = [torch.tensor(array, dtype=torch.get_default_dtype()) for array in input_stats]
+            target_stats = [torch.tensor(array, dtype=torch.get_default_dtype()) for array in target_stats]
+        return input_stats, target_stats

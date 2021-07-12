@@ -77,9 +77,18 @@ class MaxLikelihoodRegression(torch.nn.Module):
 
     def fit(self, dataset, fit_params):
         """
-        :param dataset (model_zoo.utils.data.SeqDataset)
-        :param fit_params (dict)
-        :return:
+        :param dataset (model_zoo.utils.data.Dataset)
+        :param fit_params = {
+                    lr=1e-3,
+                    weight_decay=1e-4,
+                    batch_size=32,
+                    logvar_penalty_coeff=1e-2,
+                    early_stopping=True,
+                    wait_epochs=10,
+                    wait_tol=1e-3,
+
+            }
+        :return: metrics dict
         """
         fit_params = dict(fit_params)
 
@@ -96,7 +105,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
 
         # main training loop
         train_loader = dataset.get_loader(fit_params['batch_size'])
-        optimizer = torch.optim.Adam(self._optim_p_groups, lr=fit_params["lr"])
+        optimizer = torch.optim.Adam(self._optim_p_groups, lr=fit_params["lr"], weight_decay=fit_params['weight_decay'])
         snapshot, train_metrics = self._training_loop(train_loader, optimizer,
                                        holdout_data, snapshot, fit_params)
 

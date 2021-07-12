@@ -3,6 +3,8 @@ import torch
 
 from scipy.stats import norm as Normal
 
+from model_zoo.utils.metrics import quantile_calibration
+
 
 class BaseEnsemble(torch.nn.Module):
     """ Component-agnostic ensemble of models with NumPy interface
@@ -28,30 +30,44 @@ class BaseEnsemble(torch.nn.Module):
         self.num_elites = num_elites
         self.components = None
 
-    def fit(self, dataset, fit_params):
+    def fit(self, dataset, fit_params, bootstrap=False):
         """
         Args:
-            dataset (model_zoo.utils.data.SeqDataset)
-            fit_params (dict): parameters to be passed to `component.fit`
+            :param dataset (model_zoo.utils.data.Dataset)
+            :param fit_params = {
+                        lr=1e-3,
+                        weight_decay=1e-4,
+                        batch_size=32,
+                        logvar_penalty_coeff=1e-2,
+                        early_stopping=True,
+                        wait_epochs=10,
+                        wait_tol=1e-3,
+                }
         """
         holdout_losses = np.empty((len(self.components),))
         train_losses = np.empty_like(holdout_losses)
         holdout_mses = np.empty_like(holdout_losses)
         for i, component in enumerate(self.components):
+            bootstrap_id = i if bootstrap else None
+            dataset.use_bootstrap(bootstrap_id)
             metrics = component.fit(dataset, fit_params)
             holdout_losses[i] = metrics['holdout_loss'][-1]
             train_losses[i] = metrics['train_loss'][-1]
             holdout_mses[i] = metrics['holdout_mse']
+        dataset.use_bootstrap(None)  # TODO this could be implemented as a context
 
         # rank components by holdout loss
         self.component_rank.sort(key=lambda k: holdout_losses[k])
         print(f"holdout loss: {holdout_losses}")
         print(f"holdout MSE: {holdout_mses}")
         print(f"best components: {self.component_rank[:self.num_elites]}")
+
+        holdout_metrics = self.validate(*dataset.get_holdout_data())
         metrics = dict(
-            train_loss=[train_losses.mean()],
-            holdout_loss=[holdout_losses.mean()],
-            holdout_mse=holdout_mses.mean()
+            train_loss=train_losses.mean().item(),
+            holdout_nll=holdout_metrics['val_nll'],
+            holdout_mse=holdout_metrics['val_mse'],
+            holdout_ece=holdout_metrics['ece']
         )
         return metrics
 
@@ -92,13 +108,19 @@ class BaseEnsemble(torch.nn.Module):
             metrics (dict): MSE and log_prob of aggregate predictive distribution
         """
         self.reset()
-        pred_mean, pred_var = self.predict(inputs, factored=False)
-        mse = ((pred_mean - targets) ** 2).mean()
-        nll = -Normal.logpdf(targets, pred_mean, np.sqrt(pred_var)).mean()
-        metrics = dict(
+
+        agg_mean, agg_var = self.predict(inputs, factored=False)
+        metrics = quantile_calibration(torch.tensor(agg_mean), torch.tensor(agg_var).sqrt(),
+                                       torch.tensor(targets))
+
+        pred_means, pred_vars = self.predict(inputs, factored=True)
+        mse = ((pred_means.mean(0) - targets) ** 2).mean()
+        targets = np.tile(targets, (self.num_elites, 1, 1))
+        nll = -Normal.logpdf(targets, pred_means, np.sqrt(pred_vars)).mean()
+        metrics.update(dict(
             val_mse=mse.item(),
-            val_loss=nll.item()
-        )
+            val_nll=nll.item()
+        ))
         return metrics
 
     def sample(self, inputs):
