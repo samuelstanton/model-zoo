@@ -8,7 +8,7 @@ class MaxLikelihoodRegEnsemble(BaseEnsemble):
     """ Ensemble of fully-connected neural net regression models
     """
     def __init__(self, input_dim, target_dim, num_components,
-                 num_elites, model_class, model_kwargs, mode='prob'):
+                 num_elites, model_class, model_kwargs, fit_params, mode='prob'):
         """
         Args:
             input_dim (int)
@@ -17,7 +17,7 @@ class MaxLikelihoodRegEnsemble(BaseEnsemble):
             num_elites (int)
             submodule_params (dict): kwargs to pass to FC constructor)
         """
-        super().__init__(input_dim, target_dim, num_components, num_elites)
+        super().__init__(input_dim, target_dim, num_components, num_elites, fit_params)
         components = [
             MaxLikelihoodRegression(
                 input_dim,

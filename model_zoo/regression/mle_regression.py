@@ -1,8 +1,10 @@
 import numpy as np
 import torch
+import hydra
 
 from torch import nn
 from copy import deepcopy
+
 import model_zoo
 from model_zoo.utils.training import save_best
 
@@ -44,7 +46,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
         var = logvar.exp() * self.target_std ** 2
         return mean, var
 
-    def predict(self, np_inputs):
+    def predict(self, np_inputs, compat_mode='np'):
         """
         Args:
             np_inputs (np.array): [num_batch x input_dim] or [num_batch x seq_len x input_dim]
@@ -53,9 +55,16 @@ class MaxLikelihoodRegression(torch.nn.Module):
             var (np.array): [*batch_shape x target_dim]
         """
         inputs = torch.tensor(np_inputs, dtype=torch.get_default_dtype())
-        with torch.no_grad():
-            mean, var = self(inputs)
-        return mean.cpu().numpy(), var.cpu().numpy()
+        mean, var = self(inputs)
+
+        if compat_mode == 'np':
+            mean, var = mean.detach().cpu().numpy(), var.detach().cpu().numpy()
+        elif compat_mode == 'torch':
+            pass
+        else:
+            raise ValueError("unrecognized compatibility mode, use 'np' (NumPy) or 'torch' (PyTorch)")
+
+        return mean, var
 
     def sample(self, np_inputs):
         mean, var = self.predict(np_inputs)
@@ -105,7 +114,11 @@ class MaxLikelihoodRegression(torch.nn.Module):
 
         # main training loop
         train_loader = dataset.get_loader(fit_params['batch_size'])
+
+        # adding this to the config causes issues with nested instantiation.
+        # optimizer = hydra.utils.instantiate(fit_params['optimizer'], params=self._optim_p_groups)
         optimizer = torch.optim.Adam(self._optim_p_groups, lr=fit_params["lr"], weight_decay=fit_params['weight_decay'])
+
         snapshot, train_metrics = self._training_loop(train_loader, optimizer,
                                        holdout_data, snapshot, fit_params)
 

@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import copy
 
 from scipy.stats import norm as Normal
 
@@ -14,7 +15,7 @@ class BaseEnsemble(torch.nn.Module):
     the `components` attribute with a ModuleList (see `model_zoo.ensemble.GPEnsemble`).
     Components should implement a `fit` and `predict` method.
     """
-    def __init__(self, input_dim, target_dim, num_components, num_elites, *args, **kwargs):
+    def __init__(self, input_dim, target_dim, num_components, num_elites, fit_params, *args, **kwargs):
         """
         Args:
             input_dim (int)
@@ -29,6 +30,7 @@ class BaseEnsemble(torch.nn.Module):
         self.component_rank = list(range(num_components))
         self.num_elites = num_elites
         self.components = None
+        self.fit_defaults = fit_params
 
     def fit(self, dataset, fit_params, bootstrap=False):
         """
@@ -44,13 +46,16 @@ class BaseEnsemble(torch.nn.Module):
                         wait_tol=1e-3,
                 }
         """
+        updated_fit_params = copy.deepcopy(self.fit_defaults)
+        updated_fit_params.update(fit_params)
+
         holdout_losses = np.empty((len(self.components),))
         train_losses = np.empty_like(holdout_losses)
         holdout_mses = np.empty_like(holdout_losses)
         for i, component in enumerate(self.components):
             bootstrap_id = i if bootstrap else None
             dataset.use_bootstrap(bootstrap_id)
-            metrics = component.fit(dataset, fit_params)
+            metrics = component.fit(dataset, updated_fit_params)
             holdout_losses[i] = metrics['holdout_loss'][-1]
             train_losses[i] = metrics['train_loss'][-1]
             holdout_mses[i] = metrics['holdout_mse']
@@ -71,7 +76,7 @@ class BaseEnsemble(torch.nn.Module):
         )
         return metrics
 
-    def predict(self, inputs, factored=False):
+    def predict(self, inputs, factored=False, compat_mode='np'):
         """
         Args:
             inputs (np.array): [n x input_dim]
@@ -84,13 +89,20 @@ class BaseEnsemble(torch.nn.Module):
         component_means, component_vars = [], []
         for i in elite_idxs:
             component = self.components[i]
-            mean, var = component.predict(inputs)
+            mean, var = component.predict(inputs, compat_mode=compat_mode)
             component_means.append(mean)
             component_vars.append(var)
-        factored_means, factored_vars = np.stack(component_means), np.stack(component_vars)
+        if compat_mode == 'np':
+            factored_means, factored_vars = np.stack(component_means), np.stack(component_vars)
+            agg_mean = factored_means.mean(0)
+            pred_mean_var = np.power(factored_means - agg_mean, 2).mean(0)
+        elif compat_mode == 'torch':
+            factored_means, factored_vars = torch.stack(component_means), torch.stack(component_vars)
+            agg_mean = factored_means.mean(0)
+            pred_mean_var = torch.pow(factored_means - agg_mean, 2).mean(0)
+        else:
+            raise ValueError("unrecognized compatibility mode, use 'np' (NumPy) or 'torch' (PyTorch)")
 
-        agg_mean = factored_means.mean(0)
-        pred_mean_var = np.power(factored_means - agg_mean, 2).mean(0)
         if factored:
             pred_mean, pred_var = factored_means, factored_vars
         else:
