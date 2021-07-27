@@ -13,7 +13,8 @@ class SeqDataset(Dataset):
     to draw from a uniform distribution over subsequences. Use `train_seq_len=1` and `subseq_format='flat'`
     for compatibility with models that expect 2-D subsequences of length 1.
     """
-    def __init__(self, train_seq_len, holdout_ratio, subseq_format='sequential'):
+    def __init__(self, train_seq_len, holdout_ratio, subseq_format='sequential',
+                 n_bootstraps=1, bootstrap_size=1.):
         super().__init__()
         self.holdout_ratio = holdout_ratio
         self.train_input_seqs, self.train_target_seqs = [], []
@@ -22,9 +23,17 @@ class SeqDataset(Dataset):
             raise RuntimeError("train_seq_len must be at least 1")
         self.train_seq_len = train_seq_len
         self._subseq_format = subseq_format
+        self.n_bootstraps = n_bootstraps
+        self.bootstrap_size = bootstrap_size
+        self.bootstrap_idxs = None
+        self.current_bootstrap = None
 
     def __len__(self):
-        return len(self.train_input_seqs)
+        inputs, _ = self.train_data
+        if inputs is None:
+            return 0
+        num_train = inputs.shape[0]
+        return num_train
 
     def __getitem__(self, item):
         if isinstance(item, int):
@@ -43,16 +52,41 @@ class SeqDataset(Dataset):
         :param input_seq (np.array): [seq_len, input_dim]
         :param target_seq (np.array): [seq_len, target_dim]
         """
+        # reject sequences that are too short
         seq_len, _ = input_seq.shape
         if seq_len <= self.train_seq_len:
-            pass  # reject sequences that are too short
+            return None
+
+        # sequences always start in holdout
+        self.holdout_input_seqs.append(input_seq)
+        self.holdout_target_seqs.append(target_seq)
+
+        num_old = len(self)  # get number of train subseqs
+        num_new = 0
+        pop_inputs = pop_targets = None
+        if np.random.rand() > self.holdout_ratio and len(self.holdout_input_seqs) > 1:
+            # remove random sequence from holdout to add to train
+            pop_idx = np.random.randint(0, len(self.holdout_input_seqs))
+            pop_inputs = self.holdout_input_seqs.pop(pop_idx)
+            pop_targets = self.holdout_target_seqs.pop(pop_idx)
+
+            # count new subsequences that will be added
+            # formatted_inputs, _ = format_seqs(pop_inputs, pop_targets, self.train_seq_len, self._subseq_format)
+            num_new = pop_inputs.shape[0]
+
+        # update the bootstraps
+        new_bootstrap_idxs = self.get_bootstrap_idxs(0, num_new, num_new)
+        if self.bootstrap_idxs is None:
+            self.bootstrap_idxs = new_bootstrap_idxs
         else:
-            self.holdout_input_seqs.append(input_seq)
-            self.holdout_target_seqs.append(target_seq)
-            if np.random.rand() > self.holdout_ratio:
-                pop_idx = np.random.randint(0, len(self.holdout_input_seqs))
-                self.train_input_seqs.append(self.holdout_input_seqs.pop(pop_idx))
-                self.train_target_seqs.append(self.holdout_target_seqs.pop(pop_idx))
+            self.bootstrap_idxs = np.concatenate(
+                [self.bootstrap_idxs, num_old + new_bootstrap_idxs],
+                axis=-1
+            )
+        # add the popped sequences to train
+        if pop_inputs is not None:
+            self.train_input_seqs.append(pop_inputs)
+            self.train_target_seqs.append(pop_targets)
 
     def sample_holdout_subseqs(self):
         batch_size = min(5000, 3 * len(self.holdout_input_seqs))
@@ -116,8 +150,10 @@ class SeqDataset(Dataset):
 
     def get_loader(self, batch_size):
         # sampler = self.get_sampler(batch_size)
-        inputs, targets = format_seqs(self.train_input_seqs, self.train_target_seqs,
-                                      self.train_seq_len, self._subseq_format)
+        inputs, targets = self.train_data
+        if self.current_bootstrap is not None:
+            idxs = self.bootstrap_idxs[self.current_bootstrap]
+            inputs, targets = inputs[idxs], targets[idxs]
         dataset = TensorDataset(
             torch.tensor(inputs, dtype=torch.get_default_dtype()),
             torch.tensor(targets, dtype=torch.get_default_dtype())
@@ -133,24 +169,56 @@ class SeqDataset(Dataset):
         else:
             raise ValueError("unrecognized format type")
 
-    def get_holdout_data(self):
+    @property
+    def train_data(self):
+        if len(self.train_input_seqs) == 0:
+            return None, None
+        return format_seqs(self.train_input_seqs, self.train_target_seqs,
+                           self.train_seq_len, self._subseq_format)
+
+    @property
+    def holdout_data(self):
         return format_seqs(self.holdout_input_seqs, self.holdout_target_seqs,
                            self.train_seq_len, self._subseq_format)
 
+    def use_bootstrap(self, bootstrap_id):
+        if bootstrap_id is None:
+            pass
+        elif isinstance(bootstrap_id, int):
+            assert bootstrap_id < self.n_bootstraps
+        else:
+            raise ValueError('bootstrap_id should be int < self.n_bootstraps or None')
+        self.current_bootstrap = bootstrap_id
+
+    def get_bootstrap_idxs(self, start, end, n):
+        n_samples = int(self.bootstrap_size * n)
+        return np.random.randint(start, end, (self.n_bootstraps, n_samples))
+
+    def reset_bootstraps(self):
+        inputs, _ = format_seqs(self.train_input_seqs, self.train_target_seqs,
+                                      self.train_seq_len, self._subseq_format)
+        num_train = inputs.shape[0]
+        self.bootstrap_idxs = self.get_bootstrap_idxs(0, num_train, num_train * self.bootstrap_size)
+
 
 def format_seqs(input_seqs, target_seqs, subseq_len, subseq_format='sequential'):
-    seq_lens = [seq.shape[0] for seq in input_seqs]
-    num_subseqs = [seq_len // subseq_len for seq_len in seq_lens]
-    start_idxs = [np.random.randint(0, (seq_len % subseq_len) + 1) for seq_len in seq_lens]
-    stop_idxs = [start + num_chunks * subseq_len for start, num_chunks in zip(start_idxs, num_subseqs)]
-    trimmed_inputs = [seq[start:stop] for seq, start, stop in zip(input_seqs, start_idxs, stop_idxs)]
-    trimmed_targets = [seq[start:stop] for seq, start, stop in zip(target_seqs, start_idxs, stop_idxs)]
-
-    input_subseqs = [np.stack(np.split(seq, num_chunks)) for seq, num_chunks in zip(trimmed_inputs, num_subseqs)]
-    target_subseqs = [np.stack(np.split(seq, num_chunks)) for seq, num_chunks in zip(trimmed_targets, num_subseqs)]
-
-    res = [np.concatenate(input_subseqs), np.concatenate(target_subseqs)]
     if subseq_format == 'flat':
-        return [array.squeeze(1) for array in res]
+        inputs = np.concatenate(input_seqs)
+        targets = np.concatenate(target_seqs)
+
+    elif subseq_format == 'sequential':
+        seq_lens = [seq.shape[0] for seq in input_seqs]
+        num_subseqs = [seq_len // subseq_len for seq_len in seq_lens]
+        start_idxs = [np.random.randint(0, (seq_len % subseq_len) + 1) for seq_len in seq_lens]
+        stop_idxs = [start + num_chunks * subseq_len for start, num_chunks in zip(start_idxs, num_subseqs)]
+        # TODO the trimming should happen when the sequence is added
+        trimmed_inputs = [seq[start:stop] for seq, start, stop in zip(input_seqs, start_idxs, stop_idxs)]
+        trimmed_targets = [seq[start:stop] for seq, start, stop in zip(target_seqs, start_idxs, stop_idxs)]
+
+        input_subseqs = [np.stack(np.split(seq, num_chunks)) for seq, num_chunks in zip(trimmed_inputs, num_subseqs)]
+        target_subseqs = [np.stack(np.split(seq, num_chunks)) for seq, num_chunks in zip(trimmed_targets, num_subseqs)]
+        inputs, targets = np.concatenate(input_subseqs), np.concatenate(target_subseqs)
     else:
-        return res
+        raise ValueError('unrecognized subsequence format')
+
+    return inputs, targets

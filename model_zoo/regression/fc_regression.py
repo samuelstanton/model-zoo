@@ -99,7 +99,7 @@ class FCRegression(FCNet):
         if isinstance(dataset, SeqDataset):
             dataset.subseq_format('flat')
         train_loader = dataset.get_loader(fit_params['batch_size'])
-        holdout_data = [torch.tensor(array, dtype=torch.get_default_dtype()) for array in dataset.get_holdout_data()]
+        holdout_data = [torch.tensor(array, dtype=torch.get_default_dtype()) for array in dataset.holdout_data]
 
         def loss_fn(pred_dist, targets):
             target_loss = (pred_dist.mean - targets).pow(2).div(pred_dist.variance).mean()

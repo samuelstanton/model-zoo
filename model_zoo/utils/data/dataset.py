@@ -91,7 +91,8 @@ class Dataset(object):
         )
         return DataLoader(dataset, shuffle=True, batch_size=batch_size, drop_last=True)
 
-    def get_holdout_data(self):
+    @property
+    def holdout_data(self):
         return self.holdout_inputs, self.holdout_targets
 
     @property

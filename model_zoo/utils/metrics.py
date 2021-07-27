@@ -30,3 +30,12 @@ def quantile_calibration(mean, std, targets):
     }
     calibration_metrics["ece"] = ece
     return calibration_metrics
+
+
+def top_k_accuracy(logits, targets, k=1):
+    if k > 1:
+        raise NotImplementedError
+
+    pred_class = logits.argmax(dim=-1)
+    num_correct = (pred_class == targets).float().sum().item()
+    return num_correct / logits.shape[0]
