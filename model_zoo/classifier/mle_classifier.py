@@ -134,6 +134,7 @@ class MaxLikelihoodClassifier(torch.nn.Module):
     def _training_loop(self, train_loader, optimizer, holdout_data, snapshot, fit_params):
         metrics = {'train_loss': [], 'val_loss': []}
         num_batches = len(train_loader)
+        num_updates = 0
         alpha = 2 / (num_batches + 1)  # exp. moving average parameter
         train_loss = None
 
@@ -141,6 +142,7 @@ class MaxLikelihoodClassifier(torch.nn.Module):
         wait_epochs = fit_params.setdefault('wait_epochs', None)
         wait_tol = fit_params.setdefault('wait_tol', None)
         max_grad_norm = fit_params.setdefault('max_grad_norm', None)
+        max_updates = fit_params.setdefault('max_updates', None)
 
         exit_training = False
         epoch, _, _ = snapshot
@@ -155,10 +157,18 @@ class MaxLikelihoodClassifier(torch.nn.Module):
                 optimizer.step()
                 train_loss = loss.item() if train_loss is None else ((1 - alpha) * train_loss + alpha * loss.item())
 
+                num_updates += 1
+                if max_updates is not None and num_updates == max_updates:
+                    exit_training = True
+                    break
+
             self.eval()
-            holdout_metrics = self.validate(*holdout_data)
+            with torch.no_grad():
+                holdout_metrics = self.validate(*holdout_data)
             conv_metric = holdout_metrics['val_loss'] if early_stopping else train_loss
-            exit_training, snapshot = save_best(self, conv_metric, epoch, snapshot, wait_epochs, wait_tol)
+            converged, snapshot = save_best(self, conv_metric, epoch, snapshot, wait_epochs, wait_tol)
+            exit_training = converged if converged else exit_training
+
             metrics['train_loss'].append(train_loss)
             metrics['val_loss'].append(holdout_metrics['val_loss'])
             epoch += 1

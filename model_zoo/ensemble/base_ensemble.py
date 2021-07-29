@@ -43,8 +43,8 @@ class BaseEnsemble(torch.nn.Module, abc.ABC):
 
         # rank components by holdout loss
         self.component_rank.sort(key=lambda k: val_losses[k])
-        print(f"val loss: {val_losses}")
-        print(f"best components: {self.component_rank[:self.num_elites]}")
+        # print(f"val loss: {val_losses}")
+        # print(f"best components: {self.component_rank[:self.num_elites]}")
 
         metrics = self.validate(*dataset.holdout_data)
         metrics.update(dict(
