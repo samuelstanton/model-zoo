@@ -51,7 +51,11 @@ class MaxLikelihoodRegEnsemble(BaseEnsemble):
              pred_mean (np.array)
              pred_var (np.array)
         """
-        elite_idxs = self.component_rank[:self.num_elites]
+        if self.num_elites < self.num_components:
+            elite_idxs = self.component_rank[:self.num_elites]
+        else:
+            elite_idxs = np.arange(self.num_elites)
+
         component_means, component_vars = [], []
         for i in elite_idxs:
             component = self.components[i]

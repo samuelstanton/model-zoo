@@ -86,8 +86,8 @@ class Dataset(object):
             idxs = self.bootstrap_idxs[self.current_bootstrap]
             inputs, targets = inputs[idxs], targets[idxs]
         dataset = torch.utils.data.TensorDataset(
-            torch.tensor(inputs, dtype=torch.get_default_dtype()),
-            torch.tensor(targets, dtype=torch.get_default_dtype())
+            torch.tensor(inputs, dtype=torch.get_default_dtype(), device=torch.device('cpu')),
+            torch.tensor(targets, dtype=torch.get_default_dtype(), device=torch.device('cpu'))
         )
         return DataLoader(dataset, shuffle=True, batch_size=batch_size, drop_last=True)
 

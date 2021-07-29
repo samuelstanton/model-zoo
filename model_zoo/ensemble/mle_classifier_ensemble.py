@@ -48,7 +48,11 @@ class MaxLikelihoodClassifierEnsemble(BaseEnsemble):
         Returns:
              logits (np.array)
         """
-        elite_idxs = self.component_rank[:self.num_elites]
+        if self.num_elites < self.num_components:
+            elite_idxs = self.component_rank[:self.num_elites]
+        else:
+            elite_idxs = np.arange(self.num_elites)
+
         component_logits = []
         for i in elite_idxs:
             component = self.components[i]

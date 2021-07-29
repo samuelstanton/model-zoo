@@ -10,6 +10,8 @@ import model_zoo
 from model_zoo.utils.training import save_best
 from model_zoo import utils
 
+from upcycle import cuda
+
 
 class MaxLikelihoodClassifier(torch.nn.Module):
     def __init__(self, input_dim, num_classes, model_class, model_kwargs):
@@ -149,6 +151,7 @@ class MaxLikelihoodClassifier(torch.nn.Module):
         while not exit_training:
             self.train()
             for inputs, targets in train_loader:
+                inputs, targets = cuda.try_cuda(inputs, targets)
                 optimizer.zero_grad()
                 loss = self.loss_fn(inputs, targets.long())
                 loss.backward()

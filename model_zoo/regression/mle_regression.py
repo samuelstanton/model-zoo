@@ -7,6 +7,8 @@ from copy import deepcopy
 import model_zoo
 from model_zoo.utils.training import save_best
 
+from upcycle import cuda
+
 
 class MaxLikelihoodRegression(torch.nn.Module):
     def __init__(self, input_dim, target_dim, model_class, model_kwargs, mode='prob'):
@@ -166,6 +168,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
         while not exit_training:
             self.train()
             for inputs, targets in train_loader:
+                inputs, targets = cuda.try_cuda(inputs, targets)
                 optimizer.zero_grad()
                 loss = self.loss_fn(inputs, targets, fit_params['logvar_penalty_coeff'])
                 loss.backward()
