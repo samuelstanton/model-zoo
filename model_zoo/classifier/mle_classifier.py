@@ -1,16 +1,12 @@
 import numpy as np
 import torch
-import hydra
 
-from torch import nn
 import torch.nn.functional as F
 from copy import deepcopy
 
 import model_zoo
 from model_zoo.utils.training import save_best
 from model_zoo import utils
-
-from upcycle import cuda
 
 
 class MaxLikelihoodClassifier(torch.nn.Module):

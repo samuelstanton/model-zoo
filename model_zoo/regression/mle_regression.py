@@ -7,8 +7,6 @@ from copy import deepcopy
 import model_zoo
 from model_zoo.utils.training import save_best
 
-from upcycle import cuda
-
 
 class MaxLikelihoodRegression(torch.nn.Module):
     def __init__(self, input_dim, target_dim, model_class, model_kwargs, mode='prob'):
