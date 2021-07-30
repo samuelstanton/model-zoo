@@ -151,7 +151,7 @@ class MaxLikelihoodClassifier(torch.nn.Module):
         while not exit_training:
             self.train()
             for inputs, targets in train_loader:
-                inputs, targets = cuda.try_cuda(inputs, targets)
+                inputs, targets = inputs.to(self.device), targets.to(self.device)
                 optimizer.zero_grad()
                 loss = self.loss_fn(inputs, targets.long())
                 loss.backward()
@@ -196,3 +196,7 @@ class MaxLikelihoodClassifier(torch.nn.Module):
 
     def reset(self):
         self.model.reset()
+
+    @property
+    def device(self):
+        return self.input_mean.device
