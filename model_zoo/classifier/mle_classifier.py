@@ -108,7 +108,7 @@ class MaxLikelihoodClassifier(torch.nn.Module):
         normalize = fit_params.setdefault('normalize', True)
         if normalize:
             input_stats, target_stats = dataset.get_stats(compat_mode='torch')
-            self.input_mean, self.input_std = input_stats
+            self.input_mean, self.input_std = [arr.to(self.device) for arr in input_stats]
 
         # main training loop
         train_loader = dataset.get_loader(fit_params['batch_size'])
