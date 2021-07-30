@@ -80,16 +80,21 @@ class Dataset(object):
         holdout_data = inputs[:self.n_holdout], targets[:self.n_holdout]
         return train_data, holdout_data
 
-    def get_loader(self, batch_size):
-        inputs, targets = self.train_data
-        if self.current_bootstrap is not None:
-            idxs = self.bootstrap_idxs[self.current_bootstrap]
-            inputs, targets = inputs[idxs], targets[idxs]
+    def get_loader(self, batch_size, split='train', drop_last=False):
+        if split == 'train':
+            inputs, targets = self.train_data
+            if self.current_bootstrap is not None:
+                idxs = self.bootstrap_idxs[self.current_bootstrap]
+                inputs, targets = inputs[idxs], targets[idxs]
+        elif split == 'holdout':
+            inputs, targets = self.holdout_data
+        else:
+            raise ValueError('unrecognized split')
         dataset = torch.utils.data.TensorDataset(
             torch.tensor(inputs, dtype=torch.get_default_dtype(), device=torch.device('cpu')),
             torch.tensor(targets, dtype=torch.get_default_dtype(), device=torch.device('cpu'))
         )
-        return DataLoader(dataset, shuffle=True, batch_size=batch_size, drop_last=True)
+        return DataLoader(dataset, shuffle=True, batch_size=batch_size, drop_last=drop_last)
 
     @property
     def holdout_data(self):

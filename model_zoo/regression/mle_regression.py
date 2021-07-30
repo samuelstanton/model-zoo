@@ -76,15 +76,15 @@ class MaxLikelihoodRegression(torch.nn.Module):
         res = mean if self._deterministic else mean + np.sqrt(var) * noise
         return res
 
-    def validate(self, np_inputs, np_targets):
-        inputs = torch.tensor(np_inputs, device=self.device, dtype=torch.get_default_dtype())
-        targets = torch.tensor(np_targets, device=self.device, dtype=torch.get_default_dtype())
-        self.model.reset()
-        with torch.no_grad():
-            pred_mean, pred_var = self(inputs)
-            mse = (pred_mean - targets).pow(2).mean()
-            loss = self.loss_fn(inputs, targets, beta=1e-2)
-        metrics = {'val_mse': mse.item(), 'val_loss': loss.item()}
+    def validate(self, val_loader):
+        metrics = dict(val_mse=0., val_loss=0.)
+        for inputs, targets in val_loader:
+            self.model.reset()
+            with torch.no_grad():
+                pred_mean, pred_var = self(inputs)
+                targets = targets.to(pred_mean)
+                metrics['val_mse'] += (pred_mean - targets).pow(2).mean().item() / len(val_loader)
+                metrics['val_loss'] += self.loss_fn(inputs, targets, beta=1e-2).item() / len(val_loader)
 
         return metrics
 
@@ -105,32 +105,33 @@ class MaxLikelihoodRegression(torch.nn.Module):
         """
         fit_params = dict(fit_params)
 
-        val_data = dataset.holdout_data
-        val_mse = self.validate(*val_data)["val_mse"]
+        val_loader = dataset.get_loader(fit_params['batch_size'], split='holdout')
+        val_mse = self.validate(val_loader)["val_mse"]
         snapshot = (0, val_mse, self.eval_checkpoint)
         self.load_state_dict(self.train_checkpoint)
 
         normalize = fit_params.setdefault('normalize', True)
         if normalize:
+            # note that self.input_mean is used to determine self.device, so be careful here
             input_stats, target_stats = dataset.get_stats(compat_mode='torch')
             self.input_mean, self.input_std = [arr.to(self.device) for arr in input_stats]
             self.target_mean, self.target_std = [arr.to(self.device) for arr in target_stats]
 
         # main training loop
-        train_loader = dataset.get_loader(fit_params['batch_size'])
+        train_loader = dataset.get_loader(fit_params['batch_size'], split='train')
 
         # adding this to the config causes issues with nested instantiation.
         # optimizer = hydra.utils.instantiate(fit_params['optimizer'], params=self._optim_p_groups)
         optimizer = torch.optim.Adam(self._optim_p_groups, lr=fit_params["lr"], weight_decay=fit_params['weight_decay'])
 
         snapshot, train_metrics = self._training_loop(train_loader, optimizer,
-                                       val_data, snapshot, fit_params)
+                                       val_loader, snapshot, fit_params)
 
         self.train_checkpoint = deepcopy(self.state_dict())
         _, _, self.eval_checkpoint = snapshot
         self.load_state_dict(self.eval_checkpoint)
         self.eval()
-        fit_metrics = self.validate(*val_data)
+        fit_metrics = self.validate(val_loader)
         fit_metrics.update(train_metrics)
         return fit_metrics
 
@@ -150,7 +151,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
         var_loss = pred_var.log().mean()
         return -target_loss - var_loss
 
-    def _training_loop(self, train_loader, optimizer, holdout_data, snapshot, fit_params):
+    def _training_loop(self, train_loader, optimizer, val_loader, snapshot, fit_params):
         metrics = {'train_loss': [], 'val_loss': []}
         num_batches = len(train_loader)
         alpha = 2 / (num_batches + 1)  # exp. moving average parameter
@@ -183,7 +184,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
 
             self.eval()
             with torch.no_grad():
-                val_metrics = self.validate(*holdout_data)
+                val_metrics = self.validate(val_loader)
             conv_metric = val_metrics['val_mse'] if early_stopping else train_loss
             converged, snapshot = save_best(self, conv_metric, epoch, snapshot, wait_epochs, wait_tol)
             exit_training = converged if converged else exit_training

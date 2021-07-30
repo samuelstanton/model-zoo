@@ -6,8 +6,6 @@ from torch.nn import ModuleList
 from model_zoo.ensemble import BaseEnsemble
 from model_zoo.regression import MaxLikelihoodRegression
 
-from scipy.stats import norm as Normal
-
 from model_zoo.utils.metrics import quantile_calibration
 
 
@@ -82,7 +80,7 @@ class MaxLikelihoodRegEnsemble(BaseEnsemble):
 
         return pred_mean, pred_var
 
-    def validate(self, inputs, targets):
+    def validate(self, val_loader):
         """
         Args:
             inputs (np.array): [n x input_dim]
@@ -90,27 +88,24 @@ class MaxLikelihoodRegEnsemble(BaseEnsemble):
         Returns:
             metrics (dict): MSE and log_prob of aggregate predictive distribution
         """
-        self.reset()
+        metrics = {}
+        for inputs, targets in val_loader:
+            self.reset()
+            with torch.no_grad():
+                agg_mean, agg_var = self.predict(inputs, factored=False, compat_mode='torch')
+                pred_means, pred_vars = self.predict(inputs, factored=True, compat_mode='torch')
+            targets = targets.to(agg_mean)
 
-        agg_mean, agg_var = self.predict(inputs, factored=False, compat_mode='torch')
+            batch_metrics = quantile_calibration(agg_mean, agg_var.sqrt(), targets)
+            batch_metrics['val_mse'] = ((pred_means.mean(0) - targets) ** 2).mean().item()
 
-        if isinstance(targets, np.ndarray):
-            targets = torch.tensor(targets)
-        targets = targets.to(agg_mean)
+            targets = targets.expand(self.num_elites, -1, -1)
+            pred_dist = torch.distributions.Normal(pred_means, pred_vars.sqrt())
+            batch_metrics['val_nll'] = -pred_dist.log_prob(targets).mean().item()
 
-        metrics = quantile_calibration(agg_mean, agg_var.sqrt(), targets)
-
-        pred_means, pred_vars = self.predict(inputs, factored=True, compat_mode='torch')
-        mse = ((pred_means.mean(0) - targets) ** 2).mean()
-
-        targets = targets.expand(self.num_elites, -1, -1)
-        pred_dist = torch.distributions.Normal(pred_means, pred_vars.sqrt())
-        nll = -pred_dist.log_prob(targets).mean()
-
-        metrics.update(dict(
-            val_mse=mse.item(),
-            val_nll=nll.item()
-        ))
+            for key in batch_metrics.keys():
+                metrics.setdefault(key, 0.)
+                metrics[key] += batch_metrics[key] / len(val_loader)
 
         return metrics
 

@@ -46,7 +46,8 @@ class BaseEnsemble(torch.nn.Module, abc.ABC):
         # print(f"val loss: {val_losses}")
         # print(f"best components: {self.component_rank[:self.num_elites]}")
 
-        metrics = self.validate(*dataset.holdout_data)
+        val_loader = dataset.get_loader(updated_fit_params['batch_size'], split='holdout')
+        metrics = self.validate(val_loader)
         metrics.update(dict(
             train_loss=train_losses.mean().item(),
         ))
@@ -55,7 +56,7 @@ class BaseEnsemble(torch.nn.Module, abc.ABC):
     def predict(self, inputs, *args, **kwargs):
         raise NotImplementedError
 
-    def validate(self, inputs, targets, *args, **kwargs):
+    def validate(self, val_loader, *args, **kwargs):
         """
         Args:
             inputs (np.array): [n x input_dim]

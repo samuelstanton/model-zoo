@@ -65,21 +65,15 @@ class MaxLikelihoodClassifier(torch.nn.Module):
         pred_dist = torch.distributions.Categorical(logits=logits)
         return pred_dist.sample()
 
-    def validate(self, inputs, targets):
-        if isinstance(inputs, np.ndarray):
-            inputs = torch.tensor(inputs, dtype=torch.get_default_dtype())
-
-        self.model.reset()
-        with torch.no_grad():
-            logits = self(inputs)
-
-        if isinstance(targets, np.ndarray):
-            targets = torch.tensor(targets)
-        targets = targets.to(logits)
-
-        top_1_acc = utils.metrics.top_k_accuracy(logits, targets.long(), k=1)
-        loss = self.loss_fn(inputs, targets.long())
-        metrics = {'val_acc': top_1_acc, 'val_loss': loss.item()}
+    def validate(self, val_loader):
+        metrics = {'val_acc': 0., 'val_loss': 0.}
+        for inputs, targets in val_loader:
+            self.model.reset()
+            with torch.no_grad():
+                logits = self(inputs)
+                targets = targets.to(logits).long()
+                metrics['val_acc'] += utils.metrics.top_k_accuracy(logits, targets, k=1) / len(val_loader)
+                metrics['val_loss'] += self.loss_fn(inputs, targets).item() / len(val_loader)
 
         return metrics
 
@@ -100,13 +94,14 @@ class MaxLikelihoodClassifier(torch.nn.Module):
         """
         fit_params = dict(fit_params)
 
-        val_data = dataset.holdout_data
-        val_loss = self.validate(*val_data)["val_loss"]
+        val_loader = dataset.get_loader(fit_params['batch_size'], split='holdout')
+        val_loss = self.validate(val_loader)["val_loss"]
         snapshot = (0, val_loss, self.eval_checkpoint)
         self.load_state_dict(self.train_checkpoint)
 
         normalize = fit_params.setdefault('normalize', True)
         if normalize:
+            # note that self.input_mean is used to determine self.device, so be careful here
             input_stats, target_stats = dataset.get_stats(compat_mode='torch')
             self.input_mean, self.input_std = [arr.to(self.device) for arr in input_stats]
 
@@ -118,13 +113,13 @@ class MaxLikelihoodClassifier(torch.nn.Module):
         optimizer = torch.optim.Adam(self._optim_p_groups, lr=fit_params["lr"], weight_decay=fit_params['weight_decay'])
 
         snapshot, train_metrics = self._training_loop(train_loader, optimizer,
-                                       val_data, snapshot, fit_params)
+                                       val_loader, snapshot, fit_params)
 
         self.train_checkpoint = deepcopy(self.state_dict())
         _, holdout_loss, self.eval_checkpoint = snapshot
         self.load_state_dict(self.eval_checkpoint)
         self.eval()
-        fit_metrics = self.validate(*val_data)
+        fit_metrics = self.validate(val_loader)
         fit_metrics.update(train_metrics)
         return fit_metrics
 
@@ -136,7 +131,7 @@ class MaxLikelihoodClassifier(torch.nn.Module):
     def likelihood(self, logits, targets):
         return -self.loss_fn(logits, targets)
 
-    def _training_loop(self, train_loader, optimizer, holdout_data, snapshot, fit_params):
+    def _training_loop(self, train_loader, optimizer, val_loader, snapshot, fit_params):
         metrics = {'train_loss': [], 'val_loss': []}
         num_batches = len(train_loader)
         num_updates = 0
@@ -169,7 +164,7 @@ class MaxLikelihoodClassifier(torch.nn.Module):
 
             self.eval()
             with torch.no_grad():
-                holdout_metrics = self.validate(*holdout_data)
+                holdout_metrics = self.validate(val_loader)
             conv_metric = holdout_metrics['val_loss'] if early_stopping else train_loss
             converged, snapshot = save_best(self, conv_metric, epoch, snapshot, wait_epochs, wait_tol)
             exit_training = converged if converged else exit_training

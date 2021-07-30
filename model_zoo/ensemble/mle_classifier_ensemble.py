@@ -72,7 +72,7 @@ class MaxLikelihoodClassifierEnsemble(BaseEnsemble):
             factored_logp = F.log_softmax(factored_logits, dim=-1)
             return torch.logsumexp(factored_logp, dim=0) - math.log(factored_logits.shape[0])
 
-    def validate(self, inputs, targets, *args, **kwargs):
+    def validate(self, val_loader, *args, **kwargs):
         """
         Args:
             inputs (np.array): [n x input_dim]
@@ -80,20 +80,16 @@ class MaxLikelihoodClassifierEnsemble(BaseEnsemble):
         Returns:
             metrics (dict)
         """
-        self.reset()
-        avg_logits = self.predict(inputs, factored=False, compat_mode='torch')
+        metrics = dict(val_acc=0., val_nll=0.)
+        for inputs, targets in val_loader:
+            self.reset()
+            with torch.no_grad():
+                avg_logits = self.predict(inputs, factored=False, compat_mode='torch')
+            targets = targets.to(avg_logits.device).long()
 
-        if isinstance(targets, np.ndarray):
-            targets = torch.tensor(targets, dtype=torch.get_default_dtype()).long()
-        targets = targets.to(avg_logits.device)
+            metrics['val_acc'] += utils.metrics.top_k_accuracy(avg_logits, targets, k=1) / len(val_loader)
+            metrics['val_nll'] += F.log_softmax(avg_logits, dim=-1)[..., targets].mean().item() / len(val_loader)
 
-        top_1_acc = utils.metrics.top_k_accuracy(avg_logits, targets, k=1)
-        nll = F.log_softmax(avg_logits, dim=-1)[..., targets].mean().item()
-
-        metrics = dict(
-            val_acc=top_1_acc,
-            val_nll=nll,
-        )
         return metrics
 
     def sample(self, inputs, *args, **kwargs):
