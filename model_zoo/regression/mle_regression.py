@@ -38,6 +38,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
             var (torch.Tensor): [n x target_dim]
         """
         self._check_dim(inputs)
+        inputs = inputs.to(self.device)
         inputs = (inputs - self.input_mean) / self.input_std
         output = self.model.forward(inputs)
         mean, logvar = output.chunk(2, dim=-1)
@@ -78,8 +79,8 @@ class MaxLikelihoodRegression(torch.nn.Module):
         return res
 
     def validate(self, np_inputs, np_targets):
-        inputs = torch.tensor(np_inputs, dtype=torch.get_default_dtype())
-        targets = torch.tensor(np_targets, dtype=torch.get_default_dtype())
+        inputs = torch.tensor(np_inputs, device=self.device, dtype=torch.get_default_dtype())
+        targets = torch.tensor(np_targets, device=self.device, dtype=torch.get_default_dtype())
         self.model.reset()
         with torch.no_grad():
             pred_mean, pred_var = self(inputs)
@@ -139,6 +140,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
         self._check_dim(inputs)
         self.model.reset()
         pred_mean, pred_var = self(inputs)
+        targets = targets.to(pred_mean.device)
         likelihood = self.likelihood(pred_mean, pred_var, targets)
         mse = (pred_mean - targets).pow(2).mean()
         var_bound_loss = beta * (self.max_logvar - self.min_logvar)
@@ -168,7 +170,6 @@ class MaxLikelihoodRegression(torch.nn.Module):
         while not exit_training:
             self.train()
             for inputs, targets in train_loader:
-                inputs, targets = inputs.to(self.device), targets.to(self.device)
                 optimizer.zero_grad()
                 loss = self.loss_fn(inputs, targets, fit_params['logvar_penalty_coeff'])
                 loss.backward()

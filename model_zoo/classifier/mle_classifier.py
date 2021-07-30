@@ -34,6 +34,7 @@ class MaxLikelihoodClassifier(torch.nn.Module):
             var (torch.Tensor): [n x target_dim]
         """
         self._check_dim(inputs)
+        inputs = inputs.to(self.device)
         inputs = (inputs - self.input_mean) / self.input_std
         logits = self.model.forward(inputs)
         return logits
@@ -68,15 +69,20 @@ class MaxLikelihoodClassifier(torch.nn.Module):
         pred_dist = torch.distributions.Categorical(logits=logits)
         return pred_dist.sample()
 
-    def validate(self, np_inputs, np_targets):
-        inputs = torch.tensor(np_inputs, dtype=torch.get_default_dtype())
-        targets = torch.tensor(np_targets, dtype=torch.get_default_dtype())
+    def validate(self, inputs, targets):
+        if isinstance(inputs, np.ndarray):
+            inputs = torch.tensor(inputs, dtype=torch.get_default_dtype())
+
         self.model.reset()
         with torch.no_grad():
             logits = self(inputs)
+
+        if isinstance(targets, np.ndarray):
+            targets = torch.tensor(targets)
+        targets = targets.to(logits)
+
         top_1_acc = utils.metrics.top_k_accuracy(logits, targets.long(), k=1)
         loss = self.loss_fn(inputs, targets.long())
-
         metrics = {'val_acc': top_1_acc, 'val_loss': loss.item()}
 
         return metrics
@@ -128,6 +134,7 @@ class MaxLikelihoodClassifier(torch.nn.Module):
 
     def loss_fn(self, inputs, targets):
         logits = self(inputs)
+        targets = targets.to(logits.device)
         return F.cross_entropy(logits, targets)
 
     def likelihood(self, logits, targets):
@@ -151,7 +158,6 @@ class MaxLikelihoodClassifier(torch.nn.Module):
         while not exit_training:
             self.train()
             for inputs, targets in train_loader:
-                inputs, targets = inputs.to(self.device), targets.to(self.device)
                 optimizer.zero_grad()
                 loss = self.loss_fn(inputs, targets.long())
                 loss.backward()

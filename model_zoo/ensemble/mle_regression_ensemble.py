@@ -92,18 +92,26 @@ class MaxLikelihoodRegEnsemble(BaseEnsemble):
         """
         self.reset()
 
-        agg_mean, agg_var = self.predict(inputs, factored=False)
-        metrics = quantile_calibration(torch.tensor(agg_mean), torch.tensor(agg_var).sqrt(),
-                                       torch.tensor(targets))
+        agg_mean, agg_var = self.predict(inputs, factored=False, compat_mode='torch')
 
-        pred_means, pred_vars = self.predict(inputs, factored=True)
+        if isinstance(targets, np.ndarray):
+            targets = torch.tensor(targets)
+        targets = targets.to(agg_mean)
+
+        metrics = quantile_calibration(agg_mean, agg_var.sqrt(), targets)
+
+        pred_means, pred_vars = self.predict(inputs, factored=True, compat_mode='torch')
         mse = ((pred_means.mean(0) - targets) ** 2).mean()
-        targets = np.tile(targets, (self.num_elites, 1, 1))
-        nll = -Normal.logpdf(targets, pred_means, np.sqrt(pred_vars)).mean()
+
+        targets = targets.expand(self.num_elites, -1, -1)
+        pred_dist = torch.distributions.Normal(pred_means, pred_vars.sqrt())
+        nll = -pred_dist.log_prob(targets).mean()
+
         metrics.update(dict(
             val_mse=mse.item(),
             val_nll=nll.item()
         ))
+
         return metrics
 
     def sample(self, inputs, compat_mode='np'):

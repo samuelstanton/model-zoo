@@ -80,10 +80,12 @@ class MaxLikelihoodClassifierEnsemble(BaseEnsemble):
         Returns:
             metrics (dict)
         """
-        if isinstance(targets, np.ndarray):
-            targets = torch.tensor(targets, dtype=torch.get_default_dtype()).long()
         self.reset()
         avg_logits = self.predict(inputs, factored=False, compat_mode='torch')
+
+        if isinstance(targets, np.ndarray):
+            targets = torch.tensor(targets, dtype=torch.get_default_dtype()).long()
+        targets = targets.to(avg_logits.device)
 
         top_1_acc = utils.metrics.top_k_accuracy(avg_logits, targets, k=1)
         nll = F.log_softmax(avg_logits, dim=-1)[..., targets].mean().item()
