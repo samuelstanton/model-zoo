@@ -27,7 +27,8 @@ def trunc_normal_init(m):
 
 
 class FCNet(torch.nn.Sequential):
-    """ Basic fully-connected neural network architecture
+    """
+    Basic fully-connected neural network architecture
     """
 
     def __init__(self, input_dim, output_dim, hidden_width, hidden_depth=4,

@@ -8,12 +8,12 @@ class Dataset(object):
     """
     The Dataset object maintains a persistent holdout dataset in its state.
     """
-    def __init__(self, holdout_ratio, n_bootstraps, bootstrap_size):
+    def __init__(self, holdout_ratio, n_bootstraps, bootstrap_size, max_num_holdout=5000):
         self.train_inputs, self.train_targets = None, None
         self.holdout_inputs, self.holdout_targets = None, None
         self.n_train, self.n_holdout = 0, 0
         self.holdout_ratio = holdout_ratio
-        self.max_n_holdout = 5000
+        self.max_n_holdout = max_num_holdout
         self.n_bootstraps = n_bootstraps
         self.bootstrap_size = bootstrap_size
         self.bootstrap_idxs = None
