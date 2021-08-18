@@ -3,6 +3,8 @@ import torch
 
 from torch.utils.data import DataLoader
 
+from model_zoo.utils import streaming
+
 
 class Dataset(object):
     """
@@ -18,6 +20,8 @@ class Dataset(object):
         self.bootstrap_size = bootstrap_size
         self.bootstrap_idxs = None
         self.current_bootstrap = None
+        self.input_welford = streaming.Welford()
+        self.target_welford = streaming.Welford()
 
     def __len__(self):
         return self.n_train
@@ -68,6 +72,8 @@ class Dataset(object):
                 axis=-1
             )
 
+        [self.input_welford.add_data(x) for x in new_train[0]]
+        [self.target_welford.add_data(y) for y in new_train[1]]
         self.n_train, _ = self.train_inputs.shape
         self.holdout_inputs, self.holdout_targets = new_holdout
 
@@ -114,9 +120,14 @@ class Dataset(object):
         self.current_bootstrap = bootstrap_id
 
     def get_stats(self, compat_mode='np'):
-        inputs, targets = self.train_data
-        input_stats = (inputs.mean(0), np.clip(inputs.std(0), 1e-6, None))
-        target_stats = (targets.mean(0), np.clip(targets.std(0), 1e-6, None))
+        input_stats = (
+            self.input_welford.mean(),
+            np.clip(self.input_welford.std(), 1e-6, None)
+        )
+        target_stats = (
+            self.target_welford.mean(),
+            np.clip(self.target_welford.std(), 1e-6, None)
+        )
         if compat_mode == 'torch':
             input_stats = [torch.tensor(array, dtype=torch.get_default_dtype()) for array in input_stats]
             target_stats = [torch.tensor(array, dtype=torch.get_default_dtype()) for array in target_stats]

@@ -28,15 +28,19 @@ class BaseEnsemble(torch.nn.Module, abc.ABC):
                         wait_tol=1e-3,
                 }
         """
-        updated_fit_params = copy.deepcopy(self.fit_defaults)
-        updated_fit_params.update(fit_params)
+        # allow per-component fit params
+        if isinstance(fit_params, dict):
+            fit_params = [fit_params] * len(self.components)
+        updated_fit_params = [copy.deepcopy(self.fit_defaults)] * len(self.components)
+        for default_params, passed_params in zip(updated_fit_params, fit_params):
+            default_params.update(passed_params)
 
         val_losses = np.empty((len(self.components),))
         train_losses = np.empty_like(val_losses)
         for i, component in enumerate(self.components):
             bootstrap_id = i if bootstrap else None
             dataset.use_bootstrap(bootstrap_id)
-            metrics = component.fit(dataset, updated_fit_params)
+            metrics = component.fit(dataset, updated_fit_params[i])
             val_losses[i] = metrics['val_loss'][-1]
             train_losses[i] = metrics['train_loss'][-1]
         dataset.use_bootstrap(None)  # TODO this could be implemented as a context
@@ -46,7 +50,7 @@ class BaseEnsemble(torch.nn.Module, abc.ABC):
         # print(f"val loss: {val_losses}")
         # print(f"best components: {self.component_rank[:self.num_elites]}")
 
-        val_loader = dataset.get_loader(updated_fit_params['batch_size'], split='holdout')
+        val_loader = dataset.get_loader(updated_fit_params[0]['batch_size'], split='holdout')
         metrics = self.validate(val_loader)
         metrics.update(dict(
             train_loss=train_losses.mean().item(),

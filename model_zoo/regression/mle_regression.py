@@ -76,7 +76,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
         res = mean if self._deterministic else mean + np.sqrt(var) * noise
         return res
 
-    def validate(self, val_loader):
+    def validate(self, val_loader, beta=1e-2, **kwargs):
         metrics = dict(val_mse=0., val_loss=0.)
         for inputs, targets in val_loader:
             self.model.reset()
@@ -84,7 +84,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
                 pred_mean, pred_var = self(inputs)
                 targets = targets.to(pred_mean)
                 metrics['val_mse'] += (pred_mean - targets).pow(2).mean().item() / len(val_loader)
-                metrics['val_loss'] += self.loss_fn(inputs, targets, beta=1e-2).item() / len(val_loader)
+                metrics['val_loss'] += self.loss_fn(inputs, targets, beta, **kwargs).item() / len(val_loader)
 
         return metrics
 
@@ -135,7 +135,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
         fit_metrics.update(train_metrics)
         return fit_metrics
 
-    def loss_fn(self, inputs, targets, beta):
+    def loss_fn(self, inputs, targets, beta, **kwargs):
         self._check_dim(inputs)
         self.model.reset()
         pred_mean, pred_var = self(inputs)
@@ -170,7 +170,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
             self.train()
             for inputs, targets in train_loader:
                 optimizer.zero_grad()
-                loss = self.loss_fn(inputs, targets, fit_params['logvar_penalty_coeff'])
+                loss = self.loss_fn(inputs, targets, beta=fit_params['logvar_penalty_coeff'], **fit_params)
                 loss.backward()
                 if max_grad_norm:
                     self._clip_grads(optimizer, max_grad_norm)
@@ -185,7 +185,7 @@ class MaxLikelihoodRegression(torch.nn.Module):
             self.eval()
             with torch.no_grad():
                 val_metrics = self.validate(val_loader)
-            conv_metric = val_metrics['val_mse'] if early_stopping else train_loss
+            conv_metric = val_metrics['val_loss'] if early_stopping else train_loss
             converged, snapshot = save_best(self, conv_metric, epoch, snapshot, wait_epochs, wait_tol)
             exit_training = converged if converged else exit_training
 
